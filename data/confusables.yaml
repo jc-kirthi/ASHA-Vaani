@@ -1,0 +1,102 @@
+# Sound-alike number guard confusable pairs
+# If an extracted number contains or sounds like any confusable word,
+# the field state MUST be marked 'uncertain', read back digit-by-digit,
+# and require explicit spoken confirmation before saving.
+
+languages:
+  hi:
+    pairs:
+      - words: ["saat", "saath"]
+        values: [7, 60]
+        clarification: "सात (7) या साठ (60)?"
+        digit_readback: "सात (7)"
+      - words: ["chaar", "chaalis"]
+        values: [4, 40]
+        clarification: "चार (4) या चालीस (40)?"
+        digit_readback: "चार (4)"
+      - words: ["teen", "tees"]
+        values: [3, 30]
+        clarification: "तीन (3) या तीस (30)?"
+        digit_readback: "तीन (3)"
+      - words: ["nau", "navve"]
+        values: [9, 90]
+        clarification: "नौ (9) या नब्बे (90)?"
+        digit_readback: "नौ (9)"
+      - words: ["pandrah", "pachaas"]
+        values: [15, 50]
+        clarification: "पंद्रह (15) या पचास (50)?"
+        digit_readback: "एक, पांच (15)"
+      - words: ["aath", "assi"]
+        values: [8, 80]
+        clarification: "आठ (8) या अस्सी (80)?"
+        digit_readback: "आठ (8)"
+      - words: ["do", "bees"]
+        values: [2, 20]
+        clarification: "दो (2) या बीस (20)?"
+        digit_readback: "दो (2)"
+      - words: ["cheh", "saath"]
+        values: [6, 60]
+        clarification: "छह (6) या साठ (60)?"
+        digit_readback: "छह (6)"
+
+  kn:
+    pairs:
+      - words: ["mooru", "moovathu"]
+        values: [3, 30]
+        clarification: "ಮೂರು (3) ಅಥವಾ ಮೂವತ್ತು (30)?"
+        digit_readback: "ಮೂರು (3)"
+      - words: ["naalku", "nalavathu"]
+        values: [4, 40]
+        clarification: "ನಾಲ್ಕು (4) ಅಥವಾ ನಲವತ್ತು (40)?"
+        digit_readback: "ನಾಲ್ಕು (4)"
+      - words: ["aaru", "aravathu"]
+        values: [6, 60]
+        clarification: "ಆರು (6) ಅಥವಾ ಅರವತ್ತು (60)?"
+        digit_readback: "ಆರು (6)"
+      - words: ["elu", "eppathu"]
+        values: [7, 70]
+        clarification: "ಏಳು (7) ಅಥವಾ ಎಪ್ಪತ್ತು (70)?"
+        digit_readback: "ಏಳು (7)"
+      - words: ["entu", "embathu"]
+        values: [8, 80]
+        clarification: "ಎಂಟು (8) ಅಥವಾ ಎಂಬತ್ತು (80)?"
+        digit_readback: "ಎಂಟು (8)"
+      - words: ["ombattu", "tombattu"]
+        values: [9, 90]
+        clarification: "ಒಂಬತ್ತು (9) ಅಥವಾ ತೊಂಬತ್ತು (90)?"
+        digit_readback: "ಒಂಬತ್ತು (9)"
+      - words: ["hadinaidu", "aivattu"]
+        values: [15, 50]
+        clarification: "ಹದಿನೈದು (15) ಅಥವಾ ಐವತ್ತು (50)?"
+        digit_readback: "ಒಂದು, ಐದು (15)"
+
+  en:
+    pairs:
+      - words: ["fifteen", "fifty"]
+        values: [15, 50]
+        clarification: "one five (15) or five zero (50)?"
+        digit_readback: "one, five: fifteen?"
+      - words: ["fourteen", "forty"]
+        values: [14, 40]
+        clarification: "one four (14) or four zero (40)?"
+        digit_readback: "one, four: fourteen?"
+      - words: ["thirteen", "thirty"]
+        values: [13, 30]
+        clarification: "one three (13) or three zero (30)?"
+        digit_readback: "one, three: thirteen?"
+      - words: ["sixteen", "sixty"]
+        values: [16, 60]
+        clarification: "one six (16) or six zero (60)?"
+        digit_readback: "one, six: sixteen?"
+      - words: ["seventeen", "seventy"]
+        values: [17, 70]
+        clarification: "one seven (17) or seven zero (70)?"
+        digit_readback: "one, seven: seventeen?"
+      - words: ["eighteen", "eighty"]
+        values: [18, 80]
+        clarification: "one eight (18) or eight zero (80)?"
+        digit_readback: "one, eight: eighteen?"
+      - words: ["nineteen", "ninety"]
+        values: [19, 90]
+        clarification: "one nine (19) or nine zero (90)?"
+        digit_readback: "one, nine: nineteen?"

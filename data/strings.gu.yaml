@@ -1,0 +1,36 @@
+# NEEDS NATIVE REVIEW
+# Language: Gujarati (gu-IN)
+lang_code: "gu-IN"
+lang_name: "ગુજરાતી (Gujarati)"
+
+spoken:
+  ai_disclosure: "નમસ્તે બહેન, હું એક એઆઈ સહાયક છું. કૃપા કરીને તમારી મુલાકાતની વિગતો જણાવો."
+  prompt_listen: "બોલો બહેન, હું સાંભળી રહી છું."
+  referral_line: "કૃપા કરીને તરત જ પ્રાથમિક આરોગ્ય કેન્દ્ર (PHC) માં મોકલો."
+  save_confirm: "બાકી બધું બરાબર છે, સેવ કરું?"
+  ask_weight: "કૃપા કરીને વજન જણાવો."
+  ask_bp: "કૃપા કરીને બ્લડ પ્રેશર જણાવો."
+  ask_last_anc: "છેલ્લી તપાસ ક્યારે થઈ હતી?"
+  ask_ifa: "શું લાભાર્થીએ આયર્નની ગોળીઓ લીધી છે?"
+  ask_beneficiary_id: "કૃપા કરીને લાભાર્થીનું નામ અથવા આઈડી જણાવો."
+  disambiguate_name: "આ નામના બે લાભાર્થી છે - {name}, ઘર નંબર {h1} કે {h2}?"
+  confusable_confirm: "શું તમે {word} કહ્યું? કૃપા કરીને ખાતરી કરો."
+  record_saved: "વિગતો સુરક્ષિત રીતે સેવ થઈ ગઈ છે. ફોલો-અપ યાદી અહીં છે."
+
+ui:
+  app_title: "આશા વાણી"
+  visit_tab: "મુલાકાત"
+  records_tab: "રજિસ્ટર"
+  settings_tab: "સેટિંગ્સ"
+  listening: "સાંભળી રહ્યા છીએ..."
+  thinking: "તપાસી રહ્યા છીએ..."
+  confirm: "ખાતરી કરો"
+  saved: "સેવ કર્યું"
+  tap_to_speak: "બોલવા માટે ટેપ કરો"
+  stop_listening: "રોકવા માટે ટેપ કરો"
+  danger_alert: "જોખમનું લક્ષણ! તાત્કાલિક PHC માં મોકલો"
+  referral_slip: "રેફરલ સ્લિપ"
+  copy_slip: "સ્લિપ કૉપિ કરો"
+  save_record: "રેકોર્ડ સેવ કરો"
+  rerecord: "ફરી રેકોર્ડ કરો"
+  next_patient: "આગામી લાભાર્થી"

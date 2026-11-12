@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="tealGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0d9488" />
+      <stop offset="100%" stop-color="#059669" />
+    </linearGradient>
+  </defs>
+  <!-- Background with safe zone padding -->
+  <rect width="512" height="512" rx="110" fill="url(#tealGrad)" />
+  <!-- Heart and Healthcare Cross Symbol -->
+  <g transform="translate(60, 60) scale(0.76)" stroke="#ffffff" stroke-width="28" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <path d="M256 460 C256 460 70 330 70 190 C70 110 135 60 210 60 C256 60 290 85 306 120 C322 85 356 60 402 60 C477 60 542 110 542 190 C542 330 256 460 256 460 Z" fill="#ffffff" fill-opacity="0.18" />
+    <path d="M120 256 L200 256 L235 170 L285 350 L330 220 L365 256 L400 256" stroke="#ffffff" stroke-width="32" />
+  </g>
+</svg>

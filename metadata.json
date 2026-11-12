@@ -1,0 +1,6 @@
+{
+  "name": "ASHA Vaani",
+  "description": "Healthcare Voice Field Register for ASHA workers. Spoken visit notes in Indic languages converted to verified clinical registers with deterministic danger-sign safety.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

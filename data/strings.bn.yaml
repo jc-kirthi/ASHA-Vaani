@@ -1,0 +1,36 @@
+# NEEDS NATIVE REVIEW
+# Language: Bengali (bn-IN)
+lang_code: "bn-IN"
+lang_name: "বাংলা (Bengali)"
+
+spoken:
+  ai_disclosure: "নমস্কার দিদি, আমি একজন এআই সহকারী। অনুগ্রহ করে আপনার পরিদর্শনের তথ্য বলুন।"
+  prompt_listen: "বলুন দিদি, আমি শুনছি।"
+  referral_line: "অনুগ্রহ করে অবিলম্বে পিএইচসিতে (PHC) রেফার করুন।"
+  save_confirm: "বাকি সব ঠিক আছে, সেভ করব কি?"
+  ask_weight: "অনুগ্রহ করে ওজন বলুন।"
+  ask_bp: "অনুগ্রহ করে রক্তচাপ বলুন।"
+  ask_last_anc: "শেষ এএনসি পরীক্ষা কবে হয়েছিল?"
+  ask_ifa: "উপভোক্তা কি আইএফএ ট্যাবলেট পেয়েছেন?"
+  ask_beneficiary_id: "অনুগ্রহ করে উপভোক্তার নাম বা আইডি বলুন।"
+  disambiguate_name: "{name} নামে দু'জন উপভোক্তা আছেন - বাড়ি নম্বর {h1} নাকি {h2}?"
+  confusable_confirm: "আপনি কি {word} বলেছেন? অনুগ্রহ করে নিশ্চিত করুন।"
+  record_saved: "রেকর্ড নিরাপদে সংরক্ষিত হয়েছে। ফলো-আপ তালিকা দেওয়া হলো।"
+
+ui:
+  app_title: "আশা বাণী"
+  visit_tab: "পরিদর্শন"
+  records_tab: "রেজিস্টার"
+  settings_tab: "সেটিংস"
+  listening: "শুনছি..."
+  thinking: "যাচাই করছি..."
+  confirm: "নিশ্চিত করুন"
+  saved: "সংরক্ষিত"
+  tap_to_speak: "কথা বলতে ট্যাপ করুন"
+  stop_listening: "থামাতে ট্যাপ করুন"
+  danger_alert: "বিপদের লক্ষণ! অবিলম্বে PHC-তে রেফার করুন"
+  referral_slip: "রেফারেল স্লিপ"
+  copy_slip: "স্লিপ কপি করুন"
+  save_record: "রেকর্ড সেভ করুন"
+  rerecord: "আবার রেকর্ড করুন"
+  next_patient: "পরবর্তী উপভোক্তা"

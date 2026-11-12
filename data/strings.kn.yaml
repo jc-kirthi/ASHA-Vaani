@@ -1,0 +1,38 @@
+# NEEDS NATIVE REVIEW
+# Language: Kannada (kn-IN)
+# Fixed spoken strings for ASHA Vaani
+
+lang_code: "kn-IN"
+lang_name: "ಕನ್ನಡ (Kannada)"
+
+spoken:
+  ai_disclosure: "ನಮಸ್ಕಾರ, ನಾನು ಎಐ ಸಹಾಯಕ. ದಯವಿಟ್ಟು ನಿಮ್ಮ ಭೇಟಿಯ ವಿವರಗಳನ್ನು ತಿಳಿಸಿ."
+  prompt_listen: "ಹೇಳಿ, ನಾನು ಕೇಳಿಸಿಕೊಳ್ಳುತ್ತಿದ್ದೇನೆ."
+  referral_line: "ದಯವಿಟ್ಟು ತಕ್ಷಣ ಪ್ರಾಥಮಿಕ ಆರೋಗ್ಯ ಕೇಂದ್ರಕ್ಕೆ (PHC) ರೆಫರ್ ಮಾಡಿ."
+  save_confirm: "ಉಳಿದೆಲ್ಲವೂ ಸರಿಯಾಗಿದೆ, ಸೇವ್ ಮಾಡಲೇ?"
+  ask_weight: "ದಯವಿಟ್ಟು ತೂಕವನ್ನು ತಿಳಿಸಿ."
+  ask_bp: "ದಯವಿಟ್ಟು ರಕ್ತದೊತ್ತಡ (BP) ತಿಳಿಸಿ."
+  ask_last_anc: "ಕೊನೆಯ ಎಎನ್‌ಸಿ ತಪಾಸಣೆ ಯಾವಾಗ ಆಯಿತು?"
+  ask_ifa: "ಫಲಾನುಭವಿ ಐಎಫ್‌ಎ ಮಾತ್ರೆಗಳನ್ನು ತೆಗೆದುಕೊಂಡಿದ್ದಾರೆಯೇ?"
+  ask_beneficiary_id: "ದಯವಿಟ್ಟು ಫಲಾನುಭವಿಯ ಹೆಸರು ಅಥವಾ ಐಡಿ ತಿಳಿಸಿ."
+  disambiguate_name: "ಈ ಹೆಸರಿನ ಇಬ್ಬರು ಫಲಾನುಭವಿಗಳಿದ್ದಾರೆ - {name}, ಮನೆ ಸಂಖ್ಯೆ {h1} ಅಥವಾ {h2}?"
+  confusable_confirm: "ನೀವು {word} ಹೇಳಿದ್ದೀರಾ? ದಯವಿಟ್ಟು ಖಚಿತಪಡಿಸಿ."
+  record_saved: "ದಾಖಲೆಯನ್ನು ಸುರಕ್ಷಿತವಾಗಿ ಸೇವ್ ಮಾಡಲಾಗಿದೆ. ಮುಂದಿನ ಭೇಟಿಗಳ ಪಟ್ಟಿ ಇಲ್ಲಿದೆ."
+
+ui:
+  app_title: "ಆಶಾ ವಾಣಿ"
+  visit_tab: "ಭೇಟಿ"
+  records_tab: "ದಾಖಲೆಗಳು"
+  settings_tab: "ಸೆಟ್ಟಿಂಗ್ಸ್"
+  listening: "ಆಲಿಸುತ್ತಿದೆ..."
+  thinking: "ಪರಿಶೀಲಿಸಲಾಗುತ್ತಿದೆ..."
+  confirm: "ಖಚಿತಪಡಿಸಿ"
+  saved: "ಉಳಿಸಲಾಗಿದೆ"
+  tap_to_speak: "ಮಾತನಾಡಲು ಒತ್ತಿರಿ"
+  stop_listening: "ನಿಲ್ಲಿಸಲು ಒತ್ತಿರಿ"
+  danger_alert: "ಅಪಾಯದ ಲಕ್ಷಣ! ತಕ್ಷಣ PHC ಗೆ ರೆಫರ್ ಮಾಡಿ"
+  referral_slip: "ರೆಫರಲ್ ಚೀಟಿ"
+  copy_slip: "ಚೀಟಿ ಕಾಪಿ ಮಾಡಿ"
+  save_record: "ದಾಖಲೆ ಸೇವ್ ಮಾಡಿ"
+  rerecord: "ಮತ್ತೆ ರೆಕಾರ್ಡ್ ಮಾಡಿ"
+  next_patient: "ಮುಂದಿನ ಫಲಾನುಭವಿ"

@@ -1,0 +1,274 @@
+# DRAFT Danger Signs Configuration for ASHA Vaani
+# Derived from MoHFW / NHM ASHA Training Guidelines & HBNC Protocol.
+# NOTE: Exact document titles, versions, and pages are clearly marked TODO for human verification.
+# See README.md for verification checklist.
+
+danger_signs:
+  - id: "vaginal_bleeding"
+    applies_to: "pregnancy"
+    name: "Vaginal Bleeding"
+    severity: "emergency"
+    source:
+      document_title: "[TODO: Verify MoHFW ASHA Training Module 6 - Maternal Health]"
+      version: "[TODO: NHM Guidelines 2020 Revision]"
+      section_or_page: "[TODO: Section 3.2, Page 28]"
+    synonyms:
+      en:
+        - "vaginal bleeding"
+        - "bleeding"
+        - "spotting"
+        - "blood discharge"
+      hi:
+        - "bleeding"
+        - "rakt sraav"
+        - "khoon aana"
+        - "khoon ja raha hai"
+        - "khoon beh raha hai"
+        - "spotting"
+      kn:
+        - "rakthasrava"
+        - "nettharu"
+        - "bleeding"
+        - "raktha hoguttide"
+
+  - id: "convulsions_fits"
+    applies_to: "pregnancy"
+    name: "Convulsions or Fits (Eclampsia)"
+    severity: "emergency"
+    source:
+      document_title: "[TODO: Verify MoHFW ASHA Training Module 6 - High Risk Pregnancy]"
+      version: "[TODO: NHM 2020 Revision]"
+      section_or_page: "[TODO: Section 4.1, Page 34]"
+    synonyms:
+      en:
+        - "convulsions"
+        - "fits"
+        - "seizures"
+        - "shivering fits"
+      hi:
+        - "daura"
+        - "jhatka"
+        - "fits"
+        - "mirgi jaisa"
+        - "aenthan"
+      kn:
+        - "fits"
+        - "moorche"
+        - "seizure"
+        - "jathaka"
+
+  - id: "severe_headache_blurred_vision"
+    applies_to: "pregnancy"
+    name: "Severe Headache with Blurred Vision (Severe Pre-eclampsia)"
+    severity: "emergency"
+    source:
+      document_title: "[TODO: Verify MoHFW ASHA Training Module 6 - High Risk Pregnancy]"
+      version: "[TODO: NHM 2020 Revision]"
+      section_or_page: "[TODO: Section 4.2, Page 36]"
+    synonyms:
+      en:
+        - "severe headache"
+        - "blurred vision"
+        - "headache with vision blur"
+      hi:
+        - "tez sar dard"
+        - "sar mein bhari dard"
+        - "dhundhla dikhna"
+        - "aankhon ke aage andhera"
+      kn:
+        - "tumba thale novu"
+        - "kannu mabbaguvudu"
+        - "drishti thondare"
+
+  - id: "high_fever_pregnancy"
+    applies_to: "pregnancy"
+    name: "High Fever during Pregnancy / Sepsis"
+    severity: "emergency"
+    source:
+      document_title: "[TODO: Verify MoHFW Guidelines on Obstetric Emergencies]"
+      version: "[TODO: MoHFW 2019]"
+      section_or_page: "[TODO: Chapter 5, Page 52]"
+    synonyms:
+      en:
+        - "high fever"
+        - "chills and fever"
+        - "very hot body"
+      hi:
+        - "tez bukhar"
+        - "bahut tej bukhar"
+        - "thandi lag kar bukhar"
+      kn:
+        - "tumba jwara"
+        - "bhari jwara"
+
+  - id: "severe_abdominal_pain"
+    applies_to: "pregnancy"
+    name: "Severe Abdominal Pain"
+    severity: "emergency"
+    source:
+      document_title: "[TODO: Verify MoHFW ASHA Training Module 6 - Complications]"
+      version: "[TODO: NHM 2020]"
+      section_or_page: "[TODO: Section 3.5, Page 31]"
+    synonyms:
+      en:
+        - "severe abdominal pain"
+        - "severe stomach ache"
+        - "acute belly pain"
+      hi:
+        - "pet mein tez dard"
+        - "pet ka asahaniya dard"
+        - "kokh mein dard"
+      kn:
+        - "hotte tumba novu"
+        - "hotte uri novu"
+
+  - id: "reduced_fetal_movement"
+    applies_to: "pregnancy"
+    name: "Reduced or Absent Fetal Movement"
+    severity: "emergency"
+    source:
+      document_title: "[TODO: Verify MoHFW MCP Card Antenatal Danger Signs]"
+      version: "[TODO: MCP Card 2021]"
+      section_or_page: "[TODO: Page 8, Fetal Monitoring]"
+    synonyms:
+      en:
+        - "reduced fetal movement"
+        - "no baby movement"
+        - "baby not kicking"
+      hi:
+        - "bachhe ki harkat kam"
+        - "bachha hil nahi raha"
+        - "movement kam hai"
+      kn:
+        - "maguvina chalane kadime"
+        - "chalane illa"
+
+  - id: "newborn_fever"
+    applies_to: "newborn"
+    name: "Newborn High Fever"
+    severity: "emergency"
+    source:
+      document_title: "[TODO: Verify MoHFW Home Based New Born Care (HBNC) Operational Guidelines]"
+      version: "[TODO: HBNC Revised 2021]"
+      section_or_page: "[TODO: Card 3, Danger Signs, Page 19]"
+    synonyms:
+      en:
+        - "newborn fever"
+        - "baby has fever"
+        - "hot to touch"
+      hi:
+        - "bachhe ko bukhar"
+        - "tez bukhar newborn"
+        - "garam sharir"
+      kn:
+        - "maguvige jwara"
+        - "kayisida mai"
+
+  - id: "newborn_hypothermia"
+    applies_to: "newborn"
+    name: "Very Cold Body (Hypothermia)"
+    severity: "emergency"
+    source:
+      document_title: "[TODO: Verify MoHFW HBNC Training Guidelines]"
+      version: "[TODO: HBNC 2021]"
+      section_or_page: "[TODO: Chapter 4, Cold Injury, Page 22]"
+    synonyms:
+      en:
+        - "cold body"
+        - "hypothermia"
+        - "baby feels very cold"
+      hi:
+        - "sharir thanda padna"
+        - "bachha bilkul thanda"
+        - "thanda sharir"
+      kn:
+        - "mai thampaaguvudu"
+        - "magu sheetha"
+
+  - id: "newborn_not_feeding"
+    applies_to: "newborn"
+    name: "Unable to Feed or Suckle"
+    severity: "emergency"
+    source:
+      document_title: "[TODO: Verify MoHFW HBNC Protocol - Sepsis and Feeding Assessment]"
+      version: "[TODO: HBNC 2021]"
+      section_or_page: "[TODO: Page 25, Table 2]"
+    synonyms:
+      en:
+        - "not feeding"
+        - "unable to suckle"
+        - "baby refusing milk"
+      hi:
+        - "doodh nahi pee raha"
+        - "doodh peena band"
+        - "feed nahi kar raha"
+      kn:
+        - "haalu kudiyuttilla"
+        - "feeding madtilla"
+
+  - id: "fast_breathing_chest_indrawing"
+    applies_to: "newborn"
+    name: "Fast Breathing or Chest Indrawing"
+    severity: "emergency"
+    source:
+      document_title: "[TODO: Verify MoHFW HBNC Protocol - Acute Respiratory Infection]"
+      version: "[TODO: HBNC 2021]"
+      section_or_page: "[TODO: Page 27, Respiratory Count > 60/min]"
+    synonyms:
+      en:
+        - "fast breathing"
+        - "chest indrawing"
+        - "rapid breathing"
+      hi:
+        - "saans tez chalna"
+        - "chhati dhasna"
+        - "pasli chalna"
+        - "saans phoolna"
+      kn:
+        - "vegavada usirata"
+        - "edeyalli ellu dhabbuvudu"
+
+  - id: "yellow_palms_soles"
+    applies_to: "newborn"
+    name: "Yellow Palms and Soles (Severe Neonatal Jaundice)"
+    severity: "emergency"
+    source:
+      document_title: "[TODO: Verify MoHFW HBNC Protocol - Neonatal Jaundice]"
+      version: "[TODO: HBNC 2021]"
+      section_or_page: "[TODO: Page 31, Zone 5 Jaundice]"
+    synonyms:
+      en:
+        - "yellow palms"
+        - "yellow soles"
+        - "severe jaundice"
+      hi:
+        - "hath paon peele"
+        - "peela pad gaya"
+        - "hatheli peeli"
+        - "taluve peele"
+      kn:
+        - "haladi aralu"
+        - "haladi kai mathu kaalu"
+
+  - id: "unresponsive_lethargic"
+    applies_to: "newborn"
+    name: "Lethargic or Unresponsive"
+    severity: "emergency"
+    source:
+      document_title: "[TODO: Verify MoHFW HBNC Protocol - Sepsis and Encephalopathy]"
+      version: "[TODO: HBNC 2021]"
+      section_or_page: "[TODO: Page 33, Activity Check]"
+    synonyms:
+      en:
+        - "lethargic"
+        - "unresponsive"
+        - "not moving"
+        - "floppy baby"
+      hi:
+        - "sust pad gaya"
+        - "koi harkat nahi"
+        - "hosh nahi hai"
+        - "bachha dhel"
+      kn:
+        - "susthagiddane"
+        - "chatanavilla"

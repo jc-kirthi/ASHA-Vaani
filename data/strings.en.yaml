@@ -1,0 +1,38 @@
+# NEEDS NATIVE REVIEW
+# Language: English (India) (en-IN)
+# Fixed spoken strings for ASHA Vaani
+
+lang_code: "en-IN"
+lang_name: "English (India)"
+
+spoken:
+  ai_disclosure: "Hello sister, I am an AI assistant. Please speak the home visit notes."
+  prompt_listen: "I am listening, please speak."
+  referral_line: "Please refer to the PHC now."
+  save_confirm: "Everything else looks good, should I save?"
+  ask_weight: "Please state the beneficiary weight."
+  ask_bp: "Please state the blood pressure reading."
+  ask_last_anc: "When was the last ANC checkup?"
+  ask_ifa: "Has the beneficiary received IFA tablets?"
+  ask_beneficiary_id: "Please state the beneficiary name or ID."
+  disambiguate_name: "Found two beneficiaries named {name} - House {h1} or House {h2}?"
+  confusable_confirm: "Did you mean {word}? Please confirm yes or no."
+  record_saved: "Visit record saved securely. Here is the follow-up checklist."
+
+ui:
+  app_title: "ASHA Vaani"
+  visit_tab: "Home Visit"
+  records_tab: "Register"
+  settings_tab: "Settings"
+  listening: "Listening..."
+  thinking: "Analyzing notes..."
+  confirm: "Confirm"
+  saved: "Saved"
+  tap_to_speak: "Tap to Speak"
+  stop_listening: "Tap to Finish"
+  danger_alert: "Danger Sign Alert! Refer to PHC immediately"
+  referral_slip: "Referral Slip"
+  copy_slip: "Copy Referral Slip"
+  save_record: "Save Record"
+  rerecord: "Re-record"
+  next_patient: "Next Beneficiary"

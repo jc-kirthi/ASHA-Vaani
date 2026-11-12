@@ -1,0 +1,36 @@
+# NEEDS NATIVE REVIEW
+# Language: Marathi (mr-IN)
+lang_code: "mr-IN"
+lang_name: "मराठी (Marathi)"
+
+spoken:
+  ai_disclosure: "नमस्कार ताई, मी एक एआय सहाय्यक आहे. कृपया तुमच्या गृहभेटीच्या नोंदी सांगा."
+  prompt_listen: "बोला ताई, मी ऐकत आहे."
+  referral_line: "कृपया तातडीने प्राथमिक आरोग्य केंद्रात (PHC) पाठवा."
+  save_confirm: "बाकी सर्व ठीक आहे, सेव्ह करू का?"
+  ask_weight: "कृपया वजन सांगा."
+  ask_bp: "कृपया रक्तदाब सांगा."
+  ask_last_anc: "शेवटची तपासणी कधी झाली होती?"
+  ask_ifa: "लाभार्थ्याने आयएफए गोळ्या घेतल्या आहेत का?"
+  ask_beneficiary_id: "कृपया लाभार्थ्याचे नाव किंवा आयडी सांगा."
+  disambiguate_name: "{name} नावाच्या दोन लाभार्थी आहेत - घर क्रमांक {h1} की {h2}?"
+  confusable_confirm: "तुम्ही {word} म्हणालात का? कृपया हो किंवा नाही सांगा."
+  record_saved: "नोंद सुरक्षितपणे जतन केली आहे. पुढील तपासणीची यादी."
+
+ui:
+  app_title: "आशा वाणी"
+  visit_tab: "गृहभेट"
+  records_tab: "नोंदवही"
+  settings_tab: "सेटिंग्ज"
+  listening: "ऐकत आहे..."
+  thinking: "तपासत आहे..."
+  confirm: "खात्री करा"
+  saved: "जतन केले"
+  tap_to_speak: "बोलण्यासाठी टॅप करा"
+  stop_listening: "थांबवण्यासाठी टॅप करा"
+  danger_alert: "धोक्याचे लक्षण! त्वरित PHC ला पाठवा"
+  referral_slip: "रेफरल स्लिप"
+  copy_slip: "स्लिप कॉपी करा"
+  save_record: "नोंद जतन करा"
+  rerecord: "पुन्हा रेकॉर्ड करा"
+  next_patient: "पुढील लाभार्थी"
