@@ -15,6 +15,7 @@ __pycache__/
 *.db
 *.sqlite
 data/cache/
+data/beneficiaries.json
 .venv/
 *.wav
 *.pcm

@@ -119,11 +119,15 @@ export function parseWeight(
     m2 = parseFloat(compMatch[1]) + parseFloat(compMatch[2]) / 1000.0;
   } else {
     // 2.8 or 2.80
-    const decMatch = clean.match(/\b(\d+\.\d+)\b/);
+    const decMatch =
+      clean.match(/(?:weight|vajan|wazan|bhaar|ತೂಕ)\s*(?:is|of|hai|:)?\s*(\d+\.\d+)\b/i) ||
+      clean.match(/\b(\d+\.\d+)\s*(?:kg|kilo(?:gram)?s?)\b/i);
     if (decMatch) {
       m2 = parseFloat(decMatch[1]);
     } else {
-      const intMatch = clean.match(/\b(\d+)\s*(?:kg|kilo|kilogram)?\b/i);
+      const intMatch =
+        clean.match(/\b(\d+)\s*(?:kg|kilo(?:gram)?s?)\b/i) ||
+        clean.match(/(?:weight|vajan|wazan|bhaar|ತೂಕ)\s*(?:is|of|hai|:)?\s*(\d+)\b/i);
       if (intMatch) {
         m2 = parseFloat(intMatch[1]);
       }

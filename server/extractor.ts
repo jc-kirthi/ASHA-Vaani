@@ -2,178 +2,283 @@ import { GoogleGenAI } from '@google/genai';
 
 export interface ExtractedVisitData {
   beneficiaryName: string | null;
+  beneficiaryNames: string[];
   beneficiaryId: string | null;
+  beneficiaryType: 'pregnant_woman' | 'newborn' | 'mother' | 'unknown';
+  age: number | null;
   houseNo: string | null;
   village: string | null;
-  visitType: 'ANC' | 'PNC' | 'immunisation';
+  visitType: 'ANC' | 'PNC' | 'immunisation' | null;
+  pregnancyMonths: number | null;
   gestationalWeeks: number | null;
+  babyAgeDays: number | null;
   childAgeDays: number | null;
   weight: number | null;
   bpSystolic: number | null;
   bpDiastolic: number | null;
+  hemoglobin: number | null;
+  lastAncDate: string | null;
+  ttStatus: string | null;
+  ifaStatus: string | null;
   ifaTablets: number | null;
   vaccinationsGiven: string[];
-  confidence: {
-    beneficiary: 'high' | 'uncertain' | 'missing';
-    weight: 'high' | 'uncertain' | 'missing';
-    bp: 'high' | 'uncertain' | 'missing';
-    ifa: 'high' | 'uncertain' | 'missing';
-  };
+  symptoms: Array<{
+    canonicalId: string;
+    negated: boolean;
+    timing: string | null;
+    certainty: 'high' | 'uncertain';
+    evidence: string;
+  }>;
+  notes: string;
+  evidence: Record<string, string | null>;
+  confidence: Record<string, 'high' | 'uncertain' | 'missing'>;
+  extractionStatus: 'confirmed' | 'uncertain';
   modelUsed: string;
 }
 
-const EXTRACTION_SYSTEM_PROMPT = `You are a clinical entity extractor for India's ASHA maternal and child health visits.
-Extract information from spoken visit notes (in Hindi, Kannada, Indian English, or code-mixed speech) into strict JSON.
+const responseJsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: [
+    'beneficiaryName', 'beneficiaryNames', 'beneficiaryType', 'age', 'houseNo',
+    'village', 'visitType', 'pregnancyMonths', 'gestationalWeeks', 'babyAgeDays',
+    'weight', 'bpSystolic', 'bpDiastolic', 'hemoglobin', 'lastAncDate',
+    'ttStatus', 'ifaStatus', 'ifaTablets', 'vaccinationsGiven', 'symptoms',
+    'notes', 'evidence',
+  ],
+  properties: {
+    beneficiaryName: { type: ['string', 'null'] },
+    beneficiaryNames: { type: 'array', items: { type: 'string' } },
+    beneficiaryType: { type: 'string', enum: ['pregnant_woman', 'newborn', 'mother', 'unknown'] },
+    age: { type: ['number', 'null'] },
+    houseNo: { type: ['string', 'null'] },
+    village: { type: ['string', 'null'] },
+    visitType: { type: ['string', 'null'], enum: ['ANC', 'PNC', 'immunisation', null] },
+    pregnancyMonths: { type: ['number', 'null'] },
+    gestationalWeeks: { type: ['number', 'null'] },
+    babyAgeDays: { type: ['number', 'null'] },
+    weight: { type: ['number', 'null'] },
+    bpSystolic: { type: ['number', 'null'] },
+    bpDiastolic: { type: ['number', 'null'] },
+    hemoglobin: { type: ['number', 'null'] },
+    lastAncDate: { type: ['string', 'null'] },
+    ttStatus: { type: ['string', 'null'] },
+    ifaStatus: { type: ['string', 'null'] },
+    ifaTablets: { type: ['number', 'null'] },
+    vaccinationsGiven: { type: 'array', items: { type: 'string' } },
+    symptoms: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['canonicalId', 'negated', 'timing', 'certainty', 'evidence'],
+        properties: {
+          canonicalId: { type: 'string' },
+          negated: { type: 'boolean' },
+          timing: { type: ['string', 'null'] },
+          certainty: { type: 'string', enum: ['high', 'uncertain'] },
+          evidence: { type: 'string' },
+        },
+      },
+    },
+    notes: { type: 'string' },
+    evidence: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['beneficiaryName', 'age', 'houseNo', 'weight', 'bloodPressure', 'ifaStatus'],
+      properties: {
+        beneficiaryName: { type: ['string', 'null'] },
+        age: { type: ['string', 'null'] },
+        houseNo: { type: ['string', 'null'] },
+        weight: { type: ['string', 'null'] },
+        bloodPressure: { type: ['string', 'null'] },
+        ifaStatus: { type: ['string', 'null'] },
+      },
+    },
+  },
+} as const;
 
-Rules:
-1. ONLY extract explicitly spoken facts. Do NOT hallucinate or guess.
-2. If a field was not mentioned, return null.
-3. visitType must be "ANC" (antenatal), "PNC" (postnatal/newborn), or "immunisation".
-4. Weight must be a clean numeric float in kilograms (e.g. 52.4 or 2.8).
-5. bpSystolic and bpDiastolic must be integers (e.g. 120 and 80 for "120 by 80").
-6. ifaTablets is the count of iron-folic acid pills given or checked.
-7. Return JSON ONLY with keys: beneficiaryName, houseNo, village, visitType, weight, bpSystolic, bpDiastolic, ifaTablets, vaccinationsGiven.
-8. NEVER include danger signs or clinical recommendations.`;
+const FIELD_NAMES = [
+  'beneficiary', 'age', 'houseNo', 'visitType', 'pregnancyMonths', 'babyAgeDays',
+  'weight', 'bp', 'hemoglobin', 'lastAncDate', 'ttStatus', 'ifa', 'vaccinations',
+] as const;
+
+class InvalidExtractionError extends Error {}
 
 export async function extractWithGemini(
   transcript: string,
-  lang: string = 'hi-IN'
+  _lang: string = 'en-IN'
 ): Promise<ExtractedVisitData> {
-  const apiKey = process.env.LLM_API_KEY || process.env.GEMINI_API_KEY;
-
-  if (!apiKey || apiKey.length < 10) {
-    return deterministicFallbackExtraction(transcript);
+  const apiKey = process.env.LLM_API_KEY;
+  if (!apiKey) {
+    throw new Error('LLM_API_KEY is missing. Set LLM_API_KEY in the .env file in the project root, then restart the backend.');
   }
 
-  try {
-    const ai = new GoogleGenAI({ apiKey });
-
-    // Attempt 1
-    const result = await attemptGeminiCall(ai, transcript, lang);
-    return result;
-  } catch (err: any) {
-    console.warn('Gemini extraction attempt 1 failed, retrying once:', err.message);
+  const ai = new GoogleGenAI({ apiKey });
+  let firstError: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      const ai = new GoogleGenAI({ apiKey });
-      const retryResult = await attemptGeminiCall(ai, `${transcript}\n\nIMPORTANT: Output valid RFC 8259 JSON only.`, lang);
-      return retryResult;
-    } catch (retryErr: any) {
-      console.warn('Gemini retry failed, using deterministic extractor:', retryErr.message);
-      return deterministicFallbackExtraction(transcript);
+      return await attemptGeminiCall(ai, transcript);
+    } catch (error) {
+      if (!(error instanceof InvalidExtractionError)) throw error;
+      firstError = error;
     }
   }
+
+  if (firstError) {
+    return uncertainExtraction();
+  }
+  throw new Error('Gemini extraction failed.');
 }
 
 async function attemptGeminiCall(
   ai: GoogleGenAI,
-  transcript: string,
-  lang: string
+  transcript: string
 ): Promise<ExtractedVisitData> {
   const response = await ai.models.generateContent({
     model: 'gemini-2.5-flash',
-    contents: `[Language: ${lang}]\nSpoken Visit Note:\n"${transcript}"\n\nExtract the JSON according to schema:`,
+    contents: transcript,
     config: {
-      systemInstruction: EXTRACTION_SYSTEM_PROMPT,
       responseMimeType: 'application/json',
+      responseJsonSchema,
       temperature: 0.1,
     },
   });
 
-  const text = response.text?.trim() || '{}';
-  const parsed = JSON.parse(text);
+  try {
+    const parsed: unknown = JSON.parse(response.text || '');
+    return validateExtraction(parsed);
+  } catch {
+    throw new InvalidExtractionError('Gemini returned invalid JSON.');
+  }
+}
 
+export function validateExtraction(value: unknown): ExtractedVisitData {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new InvalidExtractionError('Gemini returned a non-object response.');
+  }
+  const parsed = value as Record<string, unknown>;
+  const stringOrNull = (field: string): string | null =>
+    typeof parsed[field] === 'string' && parsed[field] ? parsed[field] as string : null;
+  const numberOrNull = (field: string): number | null =>
+    typeof parsed[field] === 'number' && Number.isFinite(parsed[field]) ? parsed[field] as number : null;
+  const validVisitType = ['ANC', 'PNC', 'immunisation'].includes(String(parsed.visitType))
+    ? parsed.visitType as 'ANC' | 'PNC' | 'immunisation'
+    : null;
+  const evidenceInput = parsed.evidence && typeof parsed.evidence === 'object'
+    ? parsed.evidence as Record<string, unknown>
+    : {};
+  const evidence: Record<string, string | null> = {};
+  for (const [key, item] of Object.entries(evidenceInput)) {
+    evidence[key] = typeof item === 'string' && item ? item : null;
+  }
+  const symptoms = Array.isArray(parsed.symptoms)
+    ? parsed.symptoms.flatMap((item) => {
+        if (!item || typeof item !== 'object') return [];
+        const symptom = item as Record<string, unknown>;
+        if (typeof symptom.canonicalId !== 'string' || typeof symptom.negated !== 'boolean') return [];
+        return [{
+          canonicalId: symptom.canonicalId,
+          negated: symptom.negated,
+          timing: typeof symptom.timing === 'string' ? symptom.timing : null,
+          certainty: symptom.certainty === 'high' ? 'high' as const : 'uncertain' as const,
+          evidence: typeof symptom.evidence === 'string' ? symptom.evidence : '',
+        }];
+      })
+    : [];
+  const beneficiaryType = ['pregnant_woman', 'newborn', 'mother'].includes(String(parsed.beneficiaryType))
+    ? parsed.beneficiaryType as ExtractedVisitData['beneficiaryType']
+    : 'unknown';
+  const names = Array.isArray(parsed.beneficiaryNames)
+    ? parsed.beneficiaryNames.filter((name): name is string => typeof name === 'string' && Boolean(name.trim()))
+    : [];
+  const name = stringOrNull('beneficiaryName');
+  if (name && !names.includes(name)) names.unshift(name);
+  const vaccinations = Array.isArray(parsed.vaccinationsGiven)
+    ? parsed.vaccinationsGiven.filter((item): item is string => typeof item === 'string')
+    : [];
+  const status = (present: boolean): 'high' | 'missing' => present ? 'high' : 'missing';
+  const weight = numberOrNull('weight');
+  const systolic = numberOrNull('bpSystolic');
+  const diastolic = numberOrNull('bpDiastolic');
+  const ifaTablets = numberOrNull('ifaTablets');
+  const confidence: ExtractedVisitData['confidence'] = {
+    beneficiary: status(Boolean(name)),
+    age: status(numberOrNull('age') !== null),
+    houseNo: status(Boolean(stringOrNull('houseNo'))),
+    visitType: status(Boolean(validVisitType)),
+    pregnancyMonths: status(numberOrNull('pregnancyMonths') !== null),
+    babyAgeDays: status(numberOrNull('babyAgeDays') !== null),
+    weight: status(weight !== null),
+    bp: status(systolic !== null && diastolic !== null),
+    hemoglobin: status(numberOrNull('hemoglobin') !== null),
+    lastAncDate: status(Boolean(stringOrNull('lastAncDate'))),
+    ttStatus: status(Boolean(stringOrNull('ttStatus'))),
+    ifa: status(Boolean(stringOrNull('ifaStatus')) || ifaTablets !== null),
+    vaccinations: status(vaccinations.length > 0),
+  };
   return {
-    beneficiaryName: parsed.beneficiaryName || null,
-    beneficiaryId: null, // matched against synthetic roster separately
-    houseNo: parsed.houseNo ? String(parsed.houseNo) : null,
-    village: parsed.village || null,
-    visitType: (['ANC', 'PNC', 'immunisation'].includes(parsed.visitType) ? parsed.visitType : 'ANC'),
-    gestationalWeeks: parsed.gestationalWeeks ? Number(parsed.gestationalWeeks) : null,
-    childAgeDays: parsed.childAgeDays ? Number(parsed.childAgeDays) : null,
-    weight: typeof parsed.weight === 'number' ? parsed.weight : parsed.weight ? parseFloat(parsed.weight) : null,
-    bpSystolic: parsed.bpSystolic ? parseInt(parsed.bpSystolic, 10) : null,
-    bpDiastolic: parsed.bpDiastolic ? parseInt(parsed.bpDiastolic, 10) : null,
-    ifaTablets: parsed.ifaTablets ? parseInt(parsed.ifaTablets, 10) : null,
-    vaccinationsGiven: Array.isArray(parsed.vaccinationsGiven) ? parsed.vaccinationsGiven : [],
-    confidence: {
-      beneficiary: parsed.beneficiaryName ? 'high' : 'missing',
-      weight: parsed.weight ? 'high' : 'missing',
-      bp: parsed.bpSystolic ? 'high' : 'missing',
-      ifa: parsed.ifaTablets ? 'high' : 'missing',
-    },
+    beneficiaryName: name,
+    beneficiaryNames: names,
+    beneficiaryId: null,
+    beneficiaryType,
+    age: numberOrNull('age'),
+    houseNo: stringOrNull('houseNo'),
+    village: stringOrNull('village'),
+    visitType: validVisitType,
+    pregnancyMonths: numberOrNull('pregnancyMonths'),
+    gestationalWeeks: numberOrNull('gestationalWeeks'),
+    babyAgeDays: numberOrNull('babyAgeDays'),
+    childAgeDays: numberOrNull('babyAgeDays'),
+    weight,
+    bpSystolic: systolic,
+    bpDiastolic: diastolic,
+    hemoglobin: numberOrNull('hemoglobin'),
+    lastAncDate: stringOrNull('lastAncDate'),
+    ttStatus: stringOrNull('ttStatus'),
+    ifaStatus: stringOrNull('ifaStatus'),
+    ifaTablets,
+    vaccinationsGiven: vaccinations,
+    symptoms,
+    notes: typeof parsed.notes === 'string' ? parsed.notes : '',
+    evidence,
+    confidence,
+    extractionStatus: 'confirmed',
     modelUsed: 'gemini-2.5-flash',
   };
 }
 
-/**
- * Deterministic fallback extractor using robust regex parsing for offline/test mode.
- */
-export function deterministicFallbackExtraction(transcript: string): ExtractedVisitData {
-  const t = transcript.toLowerCase();
-
-  // Visit type
-  let visitType: 'ANC' | 'PNC' | 'immunisation' = 'ANC';
-  if (t.includes('pnc') || t.includes('bachha') || t.includes('shishu') || t.includes('magu') || t.includes('newborn')) {
-    visitType = 'PNC';
-  } else if (t.includes('tika') || t.includes('vaccin') || t.includes('doses')) {
-    visitType = 'immunisation';
-  }
-
-  // BP (e.g. 120/80, 120 by 80, 120 battey 80)
-  let bpSys: number | null = null;
-  let bpDia: number | null = null;
-  const bpMatch = transcript.match(/\b(\d{2,3})\s*(?:\/|by|aur|battey|me)\s*(\d{2,3})\b/i);
-  if (bpMatch) {
-    bpSys = parseInt(bpMatch[1], 10);
-    bpDia = parseInt(bpMatch[2], 10);
-  }
-
-  // Weight (e.g. 52.4 kilo, 2.8 kg, vajan 52)
-  let weight: number | null = null;
-  const weightMatch = transcript.match(/(?:vajan|weight|bhaar)?\s*(\d{1,3}(?:\.\d+)?)\s*(?:kilo|kg|k\.g|grams)?/i);
-  if (weightMatch && weightMatch[1]) {
-    const val = parseFloat(weightMatch[1]);
-    if (val >= 1 && val <= 150) {
-      weight = val;
-    }
-  }
-
-  // IFA tablets (e.g. 30 ifa, 30 goli, 100 iron tablets)
-  let ifa: number | null = null;
-  const ifaMatch = transcript.match(/(\d+)\s*(?:ifa|iron|goli|tablets?)/i);
-  if (ifaMatch) {
-    ifa = parseInt(ifaMatch[1], 10);
-  }
-
-  // Beneficiary names from known words
-  let name: string | null = null;
-  const knownNames = ['Sita Devi', 'Radha Devi', 'Sunita Bai', 'Lakshmi Gowda', 'Anjali Patil', 'Pooja Sharma', 'Fatima Begum'];
-  for (const n of knownNames) {
-    if (t.includes(n.toLowerCase()) || t.includes(n.split(' ')[0].toLowerCase())) {
-      name = n;
-      break;
-    }
-  }
-
+function uncertainExtraction(): ExtractedVisitData {
+  const confidence = Object.fromEntries(
+    FIELD_NAMES.map((name) => [name, 'uncertain'])
+  ) as ExtractedVisitData['confidence'];
   return {
-    beneficiaryName: name,
+    beneficiaryName: null,
+    beneficiaryNames: [],
     beneficiaryId: null,
+    beneficiaryType: 'unknown',
+    age: null,
     houseNo: null,
     village: null,
-    visitType,
+    visitType: null,
+    pregnancyMonths: null,
     gestationalWeeks: null,
+    babyAgeDays: null,
     childAgeDays: null,
-    weight,
-    bpSystolic: bpSys,
-    bpDiastolic: bpDia,
-    ifaTablets: ifa,
+    weight: null,
+    bpSystolic: null,
+    bpDiastolic: null,
+    hemoglobin: null,
+    lastAncDate: null,
+    ttStatus: null,
+    ifaStatus: null,
+    ifaTablets: null,
     vaccinationsGiven: [],
-    confidence: {
-      beneficiary: name ? 'high' : 'missing',
-      weight: weight ? 'high' : 'missing',
-      bp: bpSys ? 'high' : 'missing',
-      ifa: ifa ? 'high' : 'missing',
-    },
-    modelUsed: 'deterministic_normalizer',
+    symptoms: [],
+    notes: '',
+    evidence: {},
+    confidence,
+    extractionStatus: 'uncertain',
+    modelUsed: 'gemini-2.5-flash',
   };
 }

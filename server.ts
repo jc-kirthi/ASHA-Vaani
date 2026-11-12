@@ -1,36 +1,106 @@
+import './server/env.ts';
 import express from 'express';
 import http from 'http';
 import path from 'path';
+import { promises as fs } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
-import dotenv from 'dotenv';
 import { synthesizeTimbreV3, warmTTSCache } from './server/gnani.ts';
 import { extractWithGemini } from './server/extractor.ts';
 import { encryptPayload, decryptPayload } from './server/crypto.ts';
-
-// Load environment variables
-dotenv.config();
+import { evaluateDangerSigns } from './src/engine/dangerEngine.ts';
+import { parseWeight } from './src/engine/numberEngine.ts';
+import type { BeneficiaryRecord } from './src/types/index.ts';
 
 const app = express();
 const server = http.createServer(app);
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 const HOST = '0.0.0.0';
+const PROJECT_ROOT = path.dirname(fileURLToPath(import.meta.url));
+const BENEFICIARIES_FILE = path.join(PROJECT_ROOT, 'data', 'beneficiaries.json');
 
 app.use(express.json({ limit: '10mb' }));
 
-// Health and Diagnostics API
-app.get('/api/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    timestamp: new Date().toISOString(),
-    stt: 'Gnani Prisma v3.0',
-    tts: 'Gnani Timbre v3.0',
-    llm: 'Gemini (gemini-2.5-flash)',
-    keysConfigured: {
-      gnani: !!process.env.GNANI_API_KEY,
-      llm: !!(process.env.LLM_API_KEY || process.env.GEMINI_API_KEY),
-      encryption: !!process.env.ENCRYPTION_KEY,
-    },
-  });
+app.get('/api/beneficiaries', async (_req, res) => {
+  try {
+    res.json(await readNewBeneficiaries());
+  } catch {
+    res.status(500).json({ error: 'Could not load synthetic beneficiaries.' });
+  }
+});
+
+app.post('/api/beneficiaries', async (req, res) => {
+  const { name, house_no, category, age, village } = req.body;
+  if (
+    typeof name !== 'string' || !name.trim() ||
+    typeof house_no !== 'string' || !house_no.trim() ||
+    !['ANC', 'PNC'].includes(category)
+  ) {
+    return res.status(400).json({ error: 'Name, house number, and valid beneficiary type are required.' });
+  }
+  try {
+    const records = await readNewBeneficiaries();
+    const existing = records.find((item) =>
+      item.name.toLocaleLowerCase() === name.trim().toLocaleLowerCase() &&
+      item.house_no === house_no.trim()
+    );
+    if (existing) return res.json(existing);
+    const created: BeneficiaryRecord = {
+      id: `NEW-${Date.now()}`,
+      name: name.trim(),
+      house_no: house_no.trim(),
+      village: typeof village === 'string' && village.trim() ? village.trim() : 'Rampur',
+      category,
+      age: Number.isFinite(Number(age)) ? Number(age) : 0,
+      isNew: true,
+    };
+    const updated = [...records, created];
+    await fs.mkdir(path.dirname(BENEFICIARIES_FILE), { recursive: true });
+    await fs.writeFile(BENEFICIARIES_FILE, JSON.stringify(updated, null, 2), 'utf8');
+    res.status(201).json(created);
+  } catch {
+    res.status(500).json({ error: 'Could not save synthetic beneficiary.' });
+  }
+});
+
+app.delete('/api/beneficiaries', async (_req, res) => {
+  try {
+    await fs.rm(BENEFICIARIES_FILE, { force: true });
+    res.json({ deleted: true });
+  } catch {
+    res.status(500).json({ error: 'Could not purge synthetic beneficiaries.' });
+  }
+});
+
+type HealthStatus = {
+  gnani_key: boolean;
+  llm_key: boolean;
+  encryption_key: boolean;
+  stt_ok: boolean;
+  tts_ok: boolean;
+  port: number;
+};
+
+let cachedHealth: HealthStatus | null = null;
+let cachedHealthAt = 0;
+let healthProbe: Promise<HealthStatus> | null = null;
+
+app.get('/api/health', async (_req, res) => {
+  if (cachedHealth && Date.now() - cachedHealthAt < 60_000) {
+    return res.json(cachedHealth);
+  }
+  if (!healthProbe) {
+    healthProbe = checkHealth()
+      .then((health) => {
+        cachedHealth = health;
+        cachedHealthAt = Date.now();
+        return health;
+      })
+      .finally(() => {
+        healthProbe = null;
+      });
+  }
+  res.json(await healthProbe);
 });
 
 app.get('/api/config', (req, res) => {
@@ -47,15 +117,51 @@ app.get('/api/config', (req, res) => {
 app.post('/api/extract', async (req, res) => {
   try {
     const { transcript, lang } = req.body;
-    if (!transcript) {
+    if (typeof transcript !== 'string' || !transcript.trim()) {
       return res.status(400).json({ error: 'Missing transcript' });
     }
-    const extracted = await extractWithGemini(transcript, lang || 'hi-IN');
+    const extracted = await extractWithGemini(transcript, lang || 'en-IN');
     res.json(extracted);
   } catch (err: any) {
-    console.error('Extraction error:', err.message);
-    res.status(500).json({ error: err.message });
+    console.error('Gemini extraction failed.');
+    res.status(502).json({ error: err.message || 'Gemini extraction failed.' });
   }
+});
+
+app.post('/api/evaluate', (req, res) => {
+  const { transcript, lang, beneficiaryName, beneficiaryId, category } = req.body;
+  if (typeof transcript !== 'string' || !transcript.trim()) {
+    return res.status(400).json({ error: 'Missing transcript' });
+  }
+  const weightText = typeof req.body.weightText === 'string' ? req.body.weightText : '';
+  res.json({
+    danger: evaluateDangerSigns(
+      transcript,
+      typeof lang === 'string' ? lang : 'en-IN',
+      typeof beneficiaryName === 'string' ? beneficiaryName : 'Beneficiary',
+      typeof beneficiaryId === 'string' ? beneficiaryId : 'ID-Pending'
+    ),
+    weight: parseWeight(
+      weightText,
+      category === 'newborn' ? 'newborn' : 'adult',
+      typeof lang === 'string' ? lang : 'en-IN'
+    ),
+    bloodPressure: (() => {
+      const systolic = Number(req.body.bpSystolic);
+      const diastolic = Number(req.body.bpDiastolic);
+      if (!Number.isFinite(systolic) || !Number.isFinite(diastolic)) {
+        return { state: 'missing', plausible: false };
+      }
+      const plausible = systolic >= 70 && systolic <= 250 && diastolic >= 40 && diastolic <= 150;
+      return { state: plausible ? 'confirmed' : 'uncertain', plausible };
+    })(),
+    hemoglobin: (() => {
+      const value = Number(req.body.hemoglobin);
+      if (!Number.isFinite(value)) return { state: 'missing', plausible: false };
+      const plausible = value >= 3 && value <= 20;
+      return { state: plausible ? 'confirmed' : 'uncertain', plausible };
+    })(),
+  });
 });
 
 // TTS REST Endpoint (uses in-memory pre-synthesized cache)
@@ -121,7 +227,7 @@ server.on('upgrade', (request, socket, head) => {
 
 // STT WebSocket Streaming Handler
 wssSTT.on('connection', (clientWs: WebSocket, request: any, url: any) => {
-  const lang = url?.searchParams?.get('lang') || 'hi-IN';
+  const lang = url?.searchParams?.get('lang') || 'en-IN';
   const apiKey = process.env.GNANI_API_KEY;
 
   if (!apiKey) {
@@ -129,7 +235,7 @@ wssSTT.on('connection', (clientWs: WebSocket, request: any, url: any) => {
       JSON.stringify({
         type: 'error',
         error_code: 'MISSING_API_KEY',
-        message: 'GNANI_API_KEY is not configured on the server.',
+        message: 'GNANI_API_KEY is missing. Set GNANI_API_KEY in the .env file in the project root, then restart the backend.',
       })
     );
     clientWs.close();
@@ -144,8 +250,9 @@ wssSTT.on('connection', (clientWs: WebSocket, request: any, url: any) => {
     'x-sample-rate': '16000',
     format: 'transcribe',
     'x-vad-threshold': '0.7',
-    'x-min-silence-ms': '500',
-    'x-min-speech-ms': '100',
+    'x-min-silence-ms': '300',
+    'x-min-speech-ms': '50',
+    'x-min-segment-ms': '100',
   };
 
   let gnaniWs: WebSocket | null = null;
@@ -314,9 +421,96 @@ async function startServer() {
   server.listen(PORT, HOST, () => {
     console.log(`[ASHA Vaani] Unified Server running on http://${HOST}:${PORT}`);
     console.log(`[ASHA Vaani] STT: Gnani Prisma v3.0 | TTS: Gnani Timbre v3.0 | LLM: Gemini`);
-    // Warm up TTS cache asynchronously
-    warmTTSCache().catch(() => {});
+    warmTTSCache().catch(() => {
+      console.warn('[ASHA Vaani] Timbre fixed-line cache warmup failed.');
+    });
   });
 }
 
 startServer();
+
+async function checkHealth(): Promise<HealthStatus> {
+  const gnaniKey = Boolean(process.env.GNANI_API_KEY);
+  const llmKey = Boolean(process.env.LLM_API_KEY);
+  const encryptionKey = Boolean(process.env.ENCRYPTION_KEY);
+  const [sttOk, ttsOk] = gnaniKey
+    ? await Promise.all([probeGnaniStt(), probeGnaniTts()])
+    : [false, false];
+  return {
+    gnani_key: gnaniKey,
+    llm_key: llmKey,
+    encryption_key: encryptionKey,
+    stt_ok: sttOk,
+    tts_ok: ttsOk,
+    port: PORT,
+  };
+}
+
+async function readNewBeneficiaries(): Promise<BeneficiaryRecord[]> {
+  try {
+    const content = await fs.readFile(BENEFICIARIES_FILE, 'utf8');
+    const parsed: unknown = JSON.parse(content);
+    if (!Array.isArray(parsed)) throw new Error('Stored beneficiary data is invalid.');
+    return parsed as BeneficiaryRecord[];
+  } catch (error) {
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') return [];
+    throw error;
+  }
+}
+
+function probeGnaniStt(): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false;
+    let ws: WebSocket | null = null;
+    const finish = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      if (ws && ws.readyState < WebSocket.CLOSING) ws.close();
+      resolve(ok);
+    };
+    const timeout = setTimeout(() => finish(false), 3500);
+    try {
+      ws = new WebSocket('wss://api.vachana.ai/stt/v3/stream', {
+        headers: {
+          'x-api-key-id': process.env.GNANI_API_KEY!,
+          model: 'prisma-v3.0',
+          language_code: 'en-IN',
+          format: 'transcribe',
+          'x-sample-rate': '16000',
+        },
+      });
+      ws.once('open', () => {
+        ws?.send(Buffer.alloc(3200));
+        setTimeout(() => finish(true), 250);
+      });
+      ws.on('message', (message) => {
+        try {
+          const response = JSON.parse(message.toString());
+          if (response.type === 'error' || response.error) finish(false);
+        } catch {
+          finish(false);
+        }
+      });
+      ws.once('error', () => finish(false));
+      ws.once('close', () => {
+        if (!settled) finish(false);
+      });
+    } catch {
+      finish(false);
+    }
+  });
+}
+
+async function probeGnaniTts(): Promise<boolean> {
+  try {
+    const result = await synthesizeTimbreV3({
+      text: 'Ready.',
+      voice: 'Shivani',
+      lang: 'en-IN',
+    });
+    return result.audioBase64.length > 0;
+  } catch {
+    return false;
+  }
+}

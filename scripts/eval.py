@@ -69,7 +69,7 @@ def evaluate(text):
         return "ASK"
     return "CLEAR"
 
-# Test Utterances: Baseline + 22 NEW Tricky Test Sentences
+# Test Utterances: Baseline + 22 tricky cases + 12 end-to-end intake scenarios
 DATASET = [
     # Baseline Set
     ("Sita Devi visit, gestational age 28 weeks, severe vaginal bleeding ho rahi hai", "FLAG", "hi"),
@@ -130,6 +130,32 @@ DATASET = [
     ("The room was cold and the newborn's body feels cold like ice, hypothermia suspected", "FLAG", "en"),
     # 22. English: Complete normal newborn checkup with negative danger signs
     ("Postnatal day 7 visit, cord is clean, no fever, not lethargic, mother is breastfeeding well, weight 2.9 kg", "CLEAR", "en"),
+
+    # --- 12 end-to-end intake scenarios ---
+    # 1. One-turn full details for an unregistered person; negated bleeding must stay CLEAR.
+    ("Kumari, 24 years old, seven months pregnant, house 15, weight 58 kilo, BP 110 by 70, not taking IFA tablets regularly, no bleeding", "CLEAR", "en"),
+    # 2. First half of a split-utterance intake.
+    ("Utterance one: unknown beneficiary Anu is 22 years old, pregnant, house 16. Utterance two: weight 54 kilo, BP 118 by 76, no bleeding", "CLEAR", "en"),
+    # 3. Missing weight should lead to a question, not a danger alert.
+    ("Sunita Sharma came for ANC, BP 110 by 70, no bleeding", "CLEAR", "en"),
+    # 4. Explicitly negated symptom.
+    ("No vaginal bleeding and no high fever today", "CLEAR", "en"),
+    # 5. Active danger symptoms must trigger referral.
+    ("Sunita Sharma has high fever and heavy bleeding", "FLAG", "en"),
+    # 6. Spoken weight correction must not be interpreted as a symptom.
+    ("No, weight is 2.8 kilo", "CLEAR", "en"),
+    # 7. Duplicate-name roster lookup asks for a house number.
+    ("Sita Devi at house 12 or Sita Devi at house 40, no bleeding", "CLEAR", "en"),
+    # 8. Unknown beneficiary is a creation case, not an alarm.
+    ("New beneficiary Rani at house 18, ANC visit, no bleeding", "CLEAR", "en"),
+    # 9. Two named people require clarification about visit ownership.
+    ("Sita Devi and Sunita Sharma were both at the house; which person is this visit for?", "CLEAR", "en"),
+    # 10. Hindi negation.
+    ("Sita Devi ko bleeding nahi hai, sab theek hai", "CLEAR", "hi"),
+    # 11. Hindi active fever and bleeding.
+    ("Sunita ko tez bukhar aur zyada bleeding ho rahi hai", "FLAG", "hi"),
+    # 12. Kannada active newborn danger sign.
+    ("Huttida maguvige tumba jwara ide, sharir bisi ide", "FLAG", "kn"),
 ]
 
 def main():

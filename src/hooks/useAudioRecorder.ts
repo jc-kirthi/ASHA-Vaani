@@ -22,8 +22,10 @@ export function useAudioRecorder(
   const animationFrameRef = useRef<number | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const speechRecognitionRef = useRef<any>(null);
+  const manualStopRef = useRef(false);
 
   const stopRecording = useCallback(() => {
+    manualStopRef.current = true;
     // 1. Stop animation meter
     if (animationFrameRef.current) {
       cancelAnimationFrame(animationFrameRef.current);
@@ -76,6 +78,7 @@ export function useAudioRecorder(
   const startRecording = useCallback(
     async (langCode: string = 'hi-IN') => {
       stopRecording();
+      manualStopRef.current = false;
       setError(null);
 
       // Branch A: TEST MODE (Browser Web Speech API Emulator - strictly OFF by default)
@@ -156,7 +159,7 @@ export function useAudioRecorder(
         ws.onmessage = (event) => {
           try {
             const data = JSON.parse(event.data);
-            if (data.type === 'error') {
+            if (data.type === 'error' || data.error) {
               console.error('[STT] Gnani STT error:', data);
               setError({
                 message: data.message || 'Gnani Prisma v3.0 streaming failed',
@@ -168,7 +171,9 @@ export function useAudioRecorder(
             }
 
             // Gnani Prisma v3.0 emits transcript messages with text field
-            if (data.text) {
+            if (data.type === 'partial' && typeof data.text === 'string') {
+              onTranscriptChunk?.(data.text, false, { engine: 'Gnani Prisma v3.0' });
+            } else if (data.text) {
               const text = data.text;
               if (onTranscriptChunk) {
                 onTranscriptChunk(text, true, {
@@ -197,8 +202,12 @@ export function useAudioRecorder(
         };
 
         ws.onclose = (event) => {
-          if (event.code !== 1000 && !error) {
+          if (event.code !== 1000 && !manualStopRef.current) {
             console.warn('[STT] WebSocket closed:', event.code, event.reason);
+            setError({
+              message: `Gnani Prisma v3.0 connection closed unexpectedly (${event.code}). Please retry.`,
+              canRetry: true,
+            });
           }
         };
 

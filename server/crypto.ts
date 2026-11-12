@@ -5,7 +5,10 @@ import crypto from 'crypto';
  * Compatible with AES-256-GCM authenticated encryption.
  */
 function getKey(): Buffer {
-  const raw = process.env.ENCRYPTION_KEY || 'default-secret-encryption-key-32';
+  const raw = process.env.ENCRYPTION_KEY;
+  if (!raw) {
+    throw new Error('ENCRYPTION_KEY is missing. Set ENCRYPTION_KEY in the .env file in the project root, then restart the backend.');
+  }
   // Derive a 32-byte key using SHA-256
   return crypto.createHash('sha256').update(raw).digest();
 }

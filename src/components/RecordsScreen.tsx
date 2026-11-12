@@ -1,15 +1,25 @@
 import React, { useState } from 'react';
 import { Search, AlertOctagon, Calendar, User, FileText, ChevronRight, Copy, Check, Lock, ShieldCheck } from 'lucide-react';
-import { SavedVisitRecord } from '../types';
+import { BeneficiaryRecord, SavedVisitRecord } from '../types';
 
 interface RecordsScreenProps {
   records: SavedVisitRecord[];
+  beneficiaries?: BeneficiaryRecord[];
+  onAddBeneficiary?: (name: string, houseNo: string, category: 'ANC' | 'PNC') => void;
 }
 
-export const RecordsScreen: React.FC<RecordsScreenProps> = ({ records }) => {
+export const RecordsScreen: React.FC<RecordsScreenProps> = ({
+  records,
+  beneficiaries = [],
+  onAddBeneficiary,
+}) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedRecord, setSelectedRecord] = useState<SavedVisitRecord | null>(null);
   const [copiedSlipId, setCopiedSlipId] = useState<string | null>(null);
+  const [addingBeneficiary, setAddingBeneficiary] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [newHouseNo, setNewHouseNo] = useState('');
+  const [newCategory, setNewCategory] = useState<'ANC' | 'PNC'>('ANC');
 
   const filtered = records.filter(
     (r) =>
@@ -22,6 +32,15 @@ export const RecordsScreen: React.FC<RecordsScreenProps> = ({ records }) => {
     navigator.clipboard.writeText(slip);
     setCopiedSlipId(id);
     setTimeout(() => setCopiedSlipId(null), 2500);
+  };
+
+  const handleAddBeneficiary = () => {
+    if (!newName.trim() || !newHouseNo.trim()) return;
+    onAddBeneficiary?.(newName.trim(), newHouseNo.trim(), newCategory);
+    setNewName('');
+    setNewHouseNo('');
+    setNewCategory('ANC');
+    setAddingBeneficiary(false);
   };
 
   return (
@@ -46,6 +65,63 @@ export const RecordsScreen: React.FC<RecordsScreenProps> = ({ records }) => {
         </span>
         <span className="text-teal-700 font-semibold">{records.length} Saved Records</span>
       </div>
+
+      <div className="p-3 bg-white rounded-xl border border-gray-200 flex items-center justify-between">
+        <span className="text-xs font-bold text-gray-700">Synthetic beneficiaries ({beneficiaries.length})</span>
+        <button
+          type="button"
+          onClick={() => setAddingBeneficiary((value) => !value)}
+          className="px-2.5 py-1.5 rounded-lg bg-teal-50 border border-teal-200 text-teal-800 text-xs font-bold"
+        >
+          Add beneficiary
+        </button>
+      </div>
+      {addingBeneficiary && (
+        <div className="p-3 bg-white rounded-xl border border-teal-200 space-y-2">
+          <input
+            value={newName}
+            onChange={(event) => setNewName(event.target.value)}
+            placeholder="Name"
+            className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm"
+          />
+          <input
+            value={newHouseNo}
+            onChange={(event) => setNewHouseNo(event.target.value)}
+            placeholder="House number"
+            className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm"
+          />
+          <select
+            value={newCategory}
+            onChange={(event) => setNewCategory(event.target.value as 'ANC' | 'PNC')}
+            className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm"
+          >
+            <option value="ANC">Pregnant woman / ANC</option>
+            <option value="PNC">Mother or newborn / PNC</option>
+          </select>
+          <button
+            type="button"
+            onClick={handleAddBeneficiary}
+            disabled={!newName.trim() || !newHouseNo.trim()}
+            className="w-full py-2 rounded-lg bg-teal-600 text-white text-xs font-bold disabled:opacity-50"
+          >
+            Save beneficiary
+          </button>
+        </div>
+      )}
+      {beneficiaries.length > 0 && (
+        <div className="space-y-1.5">
+          {beneficiaries.map((beneficiary) => (
+            <div key={beneficiary.id} className="p-2.5 bg-white rounded-xl border border-gray-200 flex items-center justify-between">
+              <span className="text-xs font-semibold text-gray-800">
+                {beneficiary.name} · House {beneficiary.house_no}
+              </span>
+              <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 text-[10px] font-bold">
+                new · synthetic/demo
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Record List */}
       {filtered.length === 0 ? (

@@ -173,6 +173,7 @@ export function useSpeechPlayer(testModeEnabled: boolean = false) {
           message: `Gnani Timbre v3.0 TTS failed: ${err.message}`,
           canRetry: true,
         });
+        if (onComplete) onComplete();
       }
     },
     [stop, testModeEnabled]

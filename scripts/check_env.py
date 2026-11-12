@@ -17,7 +17,7 @@ def load_keys():
     """Load keys from environment or .env without ever exposing their values."""
     keys = {
         'GNANI_API_KEY': os.environ.get('GNANI_API_KEY'),
-        'LLM_API_KEY': os.environ.get('LLM_API_KEY') or os.environ.get('GEMINI_API_KEY'),
+        'LLM_API_KEY': os.environ.get('LLM_API_KEY'),
         'ENCRYPTION_KEY': os.environ.get('ENCRYPTION_KEY'),
     }
 

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   UserCheck,
   Scale,
@@ -31,8 +31,7 @@ import {
 
 import { LANGUAGE_CATALOG } from './data/languageData';
 import { SYNTHETIC_ROSTER } from './data/rosterData';
-import { evaluateDangerSigns, DangerEngineResult } from './engine/dangerEngine';
-import { parseWeight } from './engine/numberEngine';
+import { DangerEngineResult } from './types';
 import { generateFollowups } from './engine/followupEngine';
 
 import { useAudioRecorder, STTErrorState } from './hooks/useAudioRecorder';
@@ -58,20 +57,21 @@ const INITIAL_FORM_DATA: VisitFormData = {
   beneficiaryId: null,
   houseNo: null,
   village: null,
-  visitType: 'ANC',
-  gestationalWeeks: 24,
+  visitType: null,
+  gestationalWeeks: null,
   childAgeDays: null,
   weight: null,
   weightRaw: null,
   bpSystolic: null,
   bpDiastolic: null,
   ifaTablets: null,
+  ifaStatus: null,
   vaccinationsGiven: [],
   vaccinationsDue: [],
   lastAncDate: null,
   fieldStates: {
     beneficiary: 'missing',
-    visitType: 'confirmed',
+    visitType: 'missing',
     weight: 'missing',
     bp: 'missing',
     ifa: 'missing',
@@ -85,8 +85,20 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'visit' | 'records' | 'settings'>('visit');
 
   // Application Settings
-  const [language, setLanguage] = useState<LanguageCode>('hi-IN');
-  const [voice, setVoice] = useState<string>('Chetana');
+  const [language, setLanguage] = useState<LanguageCode>(() => {
+    try {
+      const saved = localStorage.getItem('asha_language');
+      if (saved && saved in LANGUAGE_CATALOG) return saved as LanguageCode;
+    } catch {}
+    return 'en-IN';
+  });
+  const [voice, setVoice] = useState<string>(() => {
+    try {
+      return localStorage.getItem('asha_voice') || LANGUAGE_CATALOG['en-IN'].defaultVoice;
+    } catch {
+      return LANGUAGE_CATALOG['en-IN'].defaultVoice;
+    }
+  });
   const [textSize, setTextSize] = useState<'normal' | 'large' | 'xl'>('normal');
   const [showJudgeView, setShowJudgeView] = useState<boolean>(false);
   const [showDemoModal, setShowDemoModal] = useState<boolean>(false);
@@ -119,17 +131,133 @@ export default function App() {
   // Post-Save Followups
   const [savedFollowups, setSavedFollowups] = useState<FollowupItem[] | null>(null);
   const [savedRecords, setSavedRecords] = useState<SavedVisitRecord[]>(() => {
-    try {
-      const stored = localStorage.getItem('asha_saved_records');
-      return stored ? JSON.parse(stored) : [];
-    } catch {
-      return [];
-    }
+    return [];
   });
+  const [newBeneficiaries, setNewBeneficiaries] = useState<BeneficiaryRecord[]>([]);
+  const [workflowError, setWorkflowError] = useState<{ message: string; canRetry: boolean } | null>(null);
+  const stopRecordingRef = useRef<() => void>(() => {});
+  const lastProcessedTranscriptRef = useRef('');
+  const visitTranscriptRef = useRef('');
+  const awaitingSaveConfirmationRef = useRef(false);
+
+  useEffect(() => {
+    let active = true;
+    const restoreEncryptedRecords = async () => {
+      try {
+        const stored = JSON.parse(localStorage.getItem('asha_saved_records') || '[]');
+        if (!Array.isArray(stored) || stored.length === 0) return;
+        const records = await Promise.all(stored.map(async (item) => {
+          if (!item || typeof item.encryptedToken !== 'string') return null;
+          const response = await fetch('/api/records/decrypt', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token: item.encryptedToken }),
+          });
+          if (!response.ok) throw new Error('A saved encrypted record could not be decrypted.');
+          const result = await response.json();
+          return result.data as SavedVisitRecord;
+        }));
+        const validRecords = records.filter((record): record is SavedVisitRecord => record !== null);
+        localStorage.setItem(
+          'asha_saved_records',
+          JSON.stringify(validRecords.map((record) => ({
+            id: record.id,
+            timestamp: record.timestamp,
+            encryptedToken: record.encryptedToken,
+          })))
+        );
+        if (active) setSavedRecords(validRecords);
+      } catch {
+        localStorage.removeItem('asha_saved_records');
+        if (active) setWorkflowError({
+          message: 'Saved records could not be decrypted. The local copies were removed; check ENCRYPTION_KEY in the project root .env file.',
+          canRetry: true,
+        });
+      }
+    };
+    void restoreEncryptedRecords();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    void fetch('/api/beneficiaries')
+      .then(async (response) => {
+        if (!response.ok) throw new Error('Synthetic beneficiaries could not be loaded.');
+        return response.json();
+      })
+      .then((beneficiaries: BeneficiaryRecord[]) => {
+        if (active) setNewBeneficiaries(beneficiaries);
+      })
+      .catch(() => {
+        if (active) setWorkflowError({
+          message: 'Synthetic beneficiaries could not be loaded. Retry after checking the backend.',
+          canRetry: true,
+        });
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   // Judge Log & Metrics
   const [judgeLogs, setJudgeLogs] = useState<JudgeLogEvent[]>([]);
   const [turnLatencyMs, setTurnLatencyMs] = useState<number>(0);
+  const [serviceHealth, setServiceHealth] = useState({
+    gnani_key: false,
+    llm_key: false,
+    encryption_key: false,
+    stt_ok: false,
+    tts_ok: false,
+    port: 3000,
+  });
+  const [healthAvailable, setHealthAvailable] = useState(false);
+
+  const refreshHealth = useCallback(async () => {
+    try {
+      const response = await fetch('/api/health');
+      if (!response.ok) throw new Error('Backend health check failed');
+      const health = await response.json();
+      setServiceHealth(health);
+      setHealthAvailable(true);
+    } catch {
+      setHealthAvailable(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshHealth();
+    const timer = window.setInterval(() => void refreshHealth(), 60_000);
+    return () => window.clearInterval(timer);
+  }, [refreshHealth]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('asha_language', language);
+      localStorage.setItem('asha_voice', voice);
+    } catch {}
+  }, [language, voice]);
+
+  const healthOk = healthAvailable &&
+    serviceHealth.gnani_key &&
+    serviceHealth.llm_key &&
+    serviceHealth.encryption_key &&
+    serviceHealth.stt_ok &&
+    serviceHealth.tts_ok;
+  const missingKeys = [
+    !serviceHealth.gnani_key && 'GNANI_API_KEY',
+    !serviceHealth.llm_key && 'LLM_API_KEY',
+    !serviceHealth.encryption_key && 'ENCRYPTION_KEY',
+  ].filter(Boolean);
+  const healthMessage = !healthAvailable
+    ? 'Backend health check is unavailable. Restart the backend and retry.'
+    : missingKeys.length
+      ? missingKeys.map((key) => `${key} is missing. Set ${key} in the .env file in the project root, then restart the backend.`).join(' ')
+      : !serviceHealth.stt_ok || !serviceHealth.tts_ok
+        ? 'Gnani Prisma or Timbre health check failed. Check GNANI_API_KEY and connectivity, then retry.'
+        : 'A backend service check failed. Review server configuration and retry.';
 
   // Hooks
   const {
@@ -155,22 +283,83 @@ export default function App() {
     ]);
   }, []);
 
+  const createSyntheticBeneficiary = useCallback((
+    name: string,
+    houseNo: string,
+    category: 'ANC' | 'PNC',
+    age = 0,
+    village = 'Rampur'
+  ) => {
+    const existing = [...SYNTHETIC_ROSTER, ...newBeneficiaries].find(
+      (beneficiary) =>
+        beneficiary.name.toLocaleLowerCase() === name.toLocaleLowerCase() &&
+        beneficiary.house_no === houseNo
+    );
+    if (existing) return existing;
+    const created: BeneficiaryRecord = {
+      id: `NEW-${Date.now()}`,
+      name,
+      house_no: houseNo || 'Unknown',
+      village: village || 'Rampur',
+      category,
+      age,
+      isNew: true,
+    };
+    setNewBeneficiaries((previous) => [...previous, created]);
+    void fetch('/api/beneficiaries', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: created.name,
+        house_no: created.house_no,
+        village: created.village,
+        category: created.category,
+        age: created.age,
+      }),
+    })
+      .then(async (response) => {
+        const saved = await response.json();
+        if (!response.ok) throw new Error(saved.error || 'Could not save synthetic beneficiary.');
+        setNewBeneficiaries((previous) => previous.map((item) => item.id === created.id ? saved : item));
+      })
+      .catch((error) => {
+        setWorkflowError({
+          message: error instanceof Error ? error.message : 'Could not save synthetic beneficiary.',
+          canRetry: true,
+        });
+      });
+    return created;
+  }, [newBeneficiaries]);
+  const startRecordingRef = useRef<(lang: string) => Promise<void>>(async () => {});
+  const saveRecordRef = useRef<() => Promise<void>>(async () => {});
+
   // Process completed spoken text
   const processUtterance = useCallback(
     async (spokenText: string) => {
       const startTime = performance.now();
-      const currentLang = LANGUAGE_CATALOG[language] || LANGUAGE_CATALOG['hi-IN'];
-      addJudgeLog('TRANSCRIPT_FINAL', spokenText);
+      const currentUtterance = spokenText.trim();
+      const fullTranscript = visitTranscriptRef.current
+        ? `${visitTranscriptRef.current} ${currentUtterance}`
+        : currentUtterance;
+      visitTranscriptRef.current = fullTranscript;
+      setTranscript(fullTranscript);
+      addJudgeLog('TRANSCRIPT_FINAL', currentUtterance);
+      setWorkflowError(null);
 
       // Check for spoken correction during read-back ("no, weight is 2.8 kilo")
-      const lower = spokenText.toLowerCase();
+      const lower = fullTranscript.toLowerCase();
       const isCorrection =
-        lower.startsWith('no') ||
-        lower.includes('nahi') ||
-        lower.includes('illi') ||
-        lower.includes('galat') ||
-        lower.includes('correction') ||
-        lower.includes('change weight');
+        /^(no|nahi|illi|galat|correction)\b/i.test(currentUtterance) ||
+        currentUtterance.toLowerCase().includes('change weight');
+
+      const isAffirmative = /^(yes|yeah|yep|correct|okay|ok|save|haan|हां|हाँ|ಹೌದು)\b/i.test(currentUtterance);
+      if (stepState === 'confirm' && isAffirmative && awaitingSaveConfirmationRef.current) {
+        awaitingSaveConfirmationRef.current = false;
+        stopAudio();
+        await saveRecordRef.current();
+        return;
+      }
+      awaitingSaveConfirmationRef.current = false;
 
       if (isCorrection && isPlaying) {
         stopAudio();
@@ -180,12 +369,72 @@ export default function App() {
       setStepState('checking');
 
       // 1. Language Auto-Detection
-      if (/[\u0900-\u097F]/.test(spokenText) && language !== 'hi-IN') {
-        setLanguage('hi-IN');
+      let utteranceLanguage = language;
+      if (/[\u0900-\u097F]/.test(currentUtterance) && language !== 'hi-IN') {
+        utteranceLanguage = 'hi-IN';
+        setLanguage(utteranceLanguage);
         addJudgeLog('AUTO_LID', 'Auto-switched language to Hindi (hi-IN)');
-      } else if (/[\u0C80-\u0CFF]/.test(spokenText) && language !== 'kn-IN') {
-        setLanguage('kn-IN');
+      } else if (/[\u0C80-\u0CFF]/.test(currentUtterance) && language !== 'kn-IN') {
+        utteranceLanguage = 'kn-IN';
+        setLanguage(utteranceLanguage);
         addJudgeLog('AUTO_LID', 'Auto-switched language to Kannada (kn-IN)');
+      }
+      const currentLang = LANGUAGE_CATALOG[utteranceLanguage] || LANGUAGE_CATALOG['en-IN'];
+
+      let geminiExtracted: any;
+      try {
+        const extractRes = await fetch('/api/extract', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            transcript: activeQuestion && !/save/i.test(activeQuestion)
+              ? `Question: ${activeQuestion}\nAnswer: ${fullTranscript}`
+              : fullTranscript,
+            lang: utteranceLanguage,
+          }),
+        });
+        const extractData = await extractRes.json();
+        if (!extractRes.ok) {
+          throw new Error(extractData.error || `Gemini extraction failed (HTTP ${extractRes.status}).`);
+        }
+        geminiExtracted = extractData;
+        setExtractedJson(geminiExtracted);
+        addJudgeLog('LLM_EXTRACTION', `Gemini structured extraction (${geminiExtracted.modelUsed})`, geminiExtracted);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Gemini extraction failed.';
+        setWorkflowError({ message, canRetry: true });
+        setStepState('confirm');
+        addJudgeLog('LLM_EXTRACTION_ERROR', 'Gemini extraction failed.');
+        return;
+      }
+
+      const rawBeneficiaryNames: unknown = geminiExtracted.beneficiaryNames;
+      let spokenNames: string[] = Array.isArray(rawBeneficiaryNames)
+        ? Array.from(new Set(rawBeneficiaryNames.filter((name): name is string =>
+            typeof name === 'string' && Boolean(name.trim())
+          )))
+        : [];
+      if (activeQuestion?.startsWith('Which person is this visit for:')) {
+        const answer = currentUtterance.toLocaleLowerCase();
+        const selectedName = spokenNames.find((name: string) =>
+          answer.includes(name.toLocaleLowerCase()) ||
+          answer === name.split(/\s+/)[0].toLocaleLowerCase()
+        );
+        if (selectedName) {
+          geminiExtracted.beneficiaryName = selectedName;
+          spokenNames = [selectedName];
+          setActiveQuestion(null);
+        }
+      }
+      if (spokenNames.length > 1) {
+        const prompt = `Which person is this visit for: ${spokenNames.join(' or ')}?`;
+        setActiveQuestion(prompt);
+        setStepState('confirm');
+        speak(prompt, utteranceLanguage, voice, () => {
+          void startRecordingRef.current(utteranceLanguage);
+        });
+        addJudgeLog('MULTIPLE_BENEFICIARIES', 'Asked which named person this visit is for.', spokenNames);
+        return;
       }
 
       // 2. Beneficiary Roster Check
@@ -195,16 +444,13 @@ export default function App() {
       let matchedHouse: string | null = null;
       let matchedVillage: string | null = null;
       let isDisambiguate = false;
+      let addedNewBeneficiary = false;
 
       // Check if answering an open disambiguation question
       if (disambiguationState.isOpen) {
+        const saidHouse = geminiExtracted.houseNo || fullTranscript.match(/\b(?:house|makan|mane)\s*(?:number|no\.?)?\s*(\d+)\b/i)?.[1];
         for (const cand of disambiguationState.candidates) {
-          if (
-            lower.includes(cand.house_no) ||
-            lower.includes(`house ${cand.house_no}`) ||
-            lower.includes(`makan ${cand.house_no}`) ||
-            lower.includes(`mane ${cand.house_no}`)
-          ) {
+          if (saidHouse && String(saidHouse) === cand.house_no) {
             matchedBeneficiary = cand;
             setDisambiguationState({ isOpen: false, promptText: '', candidates: [] });
             break;
@@ -213,19 +459,31 @@ export default function App() {
       }
 
       if (!matchedBeneficiary) {
-        const matches = SYNTHETIC_ROSTER.filter((b) =>
-          lower.includes(b.name.toLowerCase())
-        );
+        const extractedName = geminiExtracted.beneficiaryName || spokenNames[0];
+        const matches = extractedName
+          ? [...SYNTHETIC_ROSTER, ...newBeneficiaries].filter(
+              (beneficiary) => beneficiary.name.toLocaleLowerCase() === extractedName.toLocaleLowerCase()
+            )
+          : [];
 
-        if (matches.length === 1) {
+        const extractedHouse = geminiExtracted.houseNo
+          ? String(geminiExtracted.houseNo)
+          : fullTranscript.match(/\b(?:house|makan|mane)\s*(?:number|no\.?)?\s*(\d+)\b/i)?.[1];
+        const selectedMatch = matches.length > 1 && extractedHouse
+          ? matches.find((beneficiary) => beneficiary.house_no === extractedHouse)
+          : undefined;
+        if (selectedMatch) {
+          matchedBeneficiary = selectedMatch;
+        } else if (matches.length === 1) {
           matchedBeneficiary = matches[0];
         } else if (matches.length > 1) {
           // Name collision -> Prompt for house number
           isDisambiguate = true;
-          const prompt =
-            language === 'kn-IN'
+          const prompt = utteranceLanguage === 'kn-IN'
               ? `${matches[0].name} ಹೆಸರಿನ ಇಬ್ಬರು ಫಲಾನುಭವಿಗಳಿದ್ದಾರೆ - ಮನೆ ಸಂಖ್ಯೆ ${matches[0].house_no} ಅಥವಾ ${matches[1].house_no}?`
-              : `${matches[0].name} नाम की दो लाभार्थी हैं - मकान नंबर ${matches[0].house_no} या मकान नंबर ${matches[1].house_no}?`;
+              : utteranceLanguage === 'en-IN'
+                ? `There are multiple beneficiaries named ${matches[0].name}. Which house is this visit for: ${matches.map((item) => item.house_no).join(' or ')}?`
+                : `${matches[0].name} नाम की दो लाभार्थी हैं - मकान नंबर ${matches[0].house_no} या मकान नंबर ${matches[1].house_no}?`;
 
           setDisambiguationState({
             isOpen: true,
@@ -233,8 +491,23 @@ export default function App() {
             candidates: matches,
           });
 
-          speak(prompt, language, voice);
+          speak(prompt, utteranceLanguage, voice, () => {
+            void startRecordingRef.current(utteranceLanguage);
+          });
           addJudgeLog('ROSTER_DISAMBIGUATION', `Prompted for ${matches[0].name} (House ${matches[0].house_no} vs ${matches[1].house_no})`);
+        } else if (extractedName) {
+          const category = geminiExtracted.beneficiaryType === 'newborn' || geminiExtracted.visitType === 'PNC'
+            ? 'PNC'
+            : 'ANC';
+          matchedBeneficiary = createSyntheticBeneficiary(
+            extractedName,
+            extractedHouse || 'Unknown',
+            category,
+            Number(geminiExtracted.age) || 0,
+            geminiExtracted.village || 'Rampur'
+          );
+          addedNewBeneficiary = true;
+          addJudgeLog('NEW_BENEFICIARY_ADDED', `New synthetic/demo beneficiary ${extractedName} added.`);
         }
       }
 
@@ -244,10 +517,16 @@ export default function App() {
         matchedHouse = matchedBeneficiary.house_no;
         matchedVillage = matchedBeneficiary.village;
       }
+      const beneficiaryAnnouncement = addedNewBeneficiary && matchedName
+        ? `New beneficiary ${matchedName} added. `
+        : '';
 
-      // 3. Visit Type Detection
-      let vType: 'ANC' | 'PNC' | 'immunisation' = 'ANC';
-      if (
+      // 3. Visit Type and normalized fields
+      let vType: 'ANC' | 'PNC' | 'immunisation' =
+        geminiExtracted.visitType || formData.visitType || 'ANC';
+      if (geminiExtracted.visitType) {
+        vType = geminiExtracted.visitType;
+      } else if (
         lower.includes('pnc') ||
         lower.includes('bachha') ||
         lower.includes('newborn') ||
@@ -261,23 +540,46 @@ export default function App() {
       }
 
       // 4. Number Normalizer (Dual Method)
-      const parsedWeight = parseWeight(spokenText, vType === 'PNC' ? 'newborn' : 'adult', language);
-
-      // 5. Blood Pressure parsing
-      let bpSys: number | null = null;
-      let bpDia: number | null = null;
-      const bpMatch = spokenText.match(/\b(\d{2,3})\s*(?:by|\/|aur|battey)\s*(\d{2,3})\b/i);
-      if (bpMatch) {
-        bpSys = parseInt(bpMatch[1], 10);
-        bpDia = parseInt(bpMatch[2], 10);
+      const rawWeightText = geminiExtracted.evidence?.weight ||
+        fullTranscript.match(/(?:weight|vajan|wazan|bhaar|ತೂಕ)\s*(?:is|of|hai|:)?\s*\d+(?:\.\d+)?\s*(?:kg|kilo(?:grams?)?|grams?)?/i)?.[0] ||
+        (geminiExtracted.weight !== null ? `${geminiExtracted.weight} kilo` : '');
+      let parsedWeight: any;
+      let bpUncertain = false;
+      let dResult: DangerEngineResult;
+      try {
+        const evaluationResponse = await fetch('/api/evaluate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            transcript: fullTranscript,
+            weightText: rawWeightText,
+            lang: utteranceLanguage,
+            beneficiaryName: matchedName || geminiExtracted.beneficiaryName,
+            beneficiaryId: matchedId,
+            category: geminiExtracted.beneficiaryType === 'newborn' ? 'newborn' : 'adult',
+            bpSystolic: geminiExtracted.bpSystolic,
+            bpDiastolic: geminiExtracted.bpDiastolic,
+            hemoglobin: geminiExtracted.hemoglobin,
+          }),
+        });
+        const evaluation = await evaluationResponse.json();
+        if (!evaluationResponse.ok) {
+          throw new Error(evaluation.error || 'Deterministic safety checks failed.');
+        }
+        parsedWeight = evaluation.weight;
+        bpUncertain = evaluation.bloodPressure.state === 'uncertain' ||
+          geminiExtracted.confidence.bp === 'uncertain';
+        dResult = evaluation.danger;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Deterministic safety checks failed.';
+        setWorkflowError({ message, canRetry: true });
+        setStepState('confirm');
+        return;
       }
 
-      // 6. IFA Tablets parsing
-      let ifaCount: number | null = null;
-      const ifaMatch = spokenText.match(/(\d+)\s*(?:ifa|iron|goli|goliya|tablets)/i);
-      if (ifaMatch) {
-        ifaCount = parseInt(ifaMatch[1], 10);
-      }
+      const bpSys = geminiExtracted.bpSystolic;
+      const bpDia = geminiExtracted.bpDiastolic;
+      const ifaCount = geminiExtracted.ifaTablets;
 
       // 7. Vaccinations
       const vaccs: string[] = [];
@@ -285,33 +587,9 @@ export default function App() {
         if (lower.includes(v)) vaccs.push(v.toUpperCase());
       });
 
-      // 8. Deterministic Danger Sign Rule Engine (MoHFW clinical safety, NEVER LLM!)
-      const dResult = evaluateDangerSigns(
-        spokenText,
-        language,
-        matchedName || 'Beneficiary',
-        matchedId || 'ID-Pending',
-        'ASHA-001'
-      );
       setDangerResult(dResult);
       addJudgeLog('DANGER_DECISION', `${dResult.decision} - ${dResult.ruleFired}`, dResult);
-
-      // 9. Call Gemini LLM Extractor via Backend Proxy
-      let geminiExtracted: any = null;
-      try {
-        const extractRes = await fetch('/api/extract', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ transcript: spokenText, lang: language }),
-        });
-        if (extractRes.ok) {
-          geminiExtracted = await extractRes.json();
-          setExtractedJson(geminiExtracted);
-          addJudgeLog('LLM_EXTRACTION', `Gemini extracted structured JSON (${geminiExtracted.modelUsed})`, geminiExtracted);
-        }
-      } catch (err) {
-        console.warn('Backend extract call failed:', err);
-      }
+      setExtractedJson({ ...geminiExtracted, normalizedWeight: parsedWeight.value, dangerDecision: dResult.decision });
 
       // Build updated Form Data
       setFormData((prev) => {
@@ -321,7 +599,9 @@ export default function App() {
         // Beneficiary
         const effectiveName = matchedName || geminiExtracted?.beneficiaryName;
         if (effectiveName) {
-          updatedStates.beneficiary = 'confirmed';
+          updatedStates.beneficiary = geminiExtracted.confidence.beneficiary === 'uncertain'
+            ? 'uncertain'
+            : 'confirmed';
           updatedEvidence.beneficiary = {
             value: `${effectiveName} (${matchedId || 'Pending'})`,
             sourceText: effectiveName,
@@ -335,7 +615,9 @@ export default function App() {
         const candidateWeight = parsedWeight.value ?? geminiExtracted?.weight;
         if (candidateWeight !== null && candidateWeight !== undefined) {
           finalWeight = candidateWeight;
-          updatedStates.weight = parsedWeight.state || 'confirmed';
+          updatedStates.weight = geminiExtracted.confidence.weight === 'uncertain'
+            ? 'uncertain'
+            : parsedWeight.state || 'confirmed';
           const prevHist = prev.evidenceTrail.weight?.previousValues || [];
           if (prev.weight !== null && prev.weight !== candidateWeight) {
             prevHist.push({
@@ -346,7 +628,7 @@ export default function App() {
           }
           updatedEvidence.weight = {
             value: candidateWeight,
-            sourceText: parsedWeight.rawText || `${candidateWeight} kg`,
+            sourceText: parsedWeight.rawText || geminiExtracted.evidence?.weight || `${candidateWeight} kg`,
             detector: 'number_normalizer',
             timestamp: new Date().toLocaleTimeString(),
             previousValues: prevHist,
@@ -357,10 +639,10 @@ export default function App() {
         const finalSys = bpSys ?? geminiExtracted?.bpSystolic;
         const finalDia = bpDia ?? geminiExtracted?.bpDiastolic;
         if (finalSys && finalDia) {
-          updatedStates.bp = 'confirmed';
+          updatedStates.bp = bpUncertain ? 'uncertain' : 'confirmed';
           updatedEvidence.bp = {
             value: `${finalSys}/${finalDia}`,
-            sourceText: `${finalSys}/${finalDia}`,
+            sourceText: geminiExtracted.evidence?.bloodPressure || `${finalSys}/${finalDia}`,
             detector: 'number_normalizer',
             timestamp: new Date().toLocaleTimeString(),
           };
@@ -372,8 +654,16 @@ export default function App() {
           updatedStates.ifa = 'confirmed';
           updatedEvidence.ifa = {
             value: finalIfa,
-            sourceText: `${finalIfa} IFA`,
+            sourceText: geminiExtracted.evidence?.ifaStatus || `${finalIfa} IFA`,
             detector: 'number_normalizer',
+            timestamp: new Date().toLocaleTimeString(),
+          };
+        } else if (geminiExtracted.ifaStatus) {
+          updatedStates.ifa = geminiExtracted.confidence.ifa === 'uncertain' ? 'uncertain' : 'confirmed';
+          updatedEvidence.ifa = {
+            value: geminiExtracted.ifaStatus,
+            sourceText: geminiExtracted.evidence?.ifaStatus || geminiExtracted.ifaStatus,
+            detector: 'LLM',
             timestamp: new Date().toLocaleTimeString(),
           };
         }
@@ -394,6 +684,10 @@ export default function App() {
           bpSystolic: finalSys || prev.bpSystolic,
           bpDiastolic: finalDia || prev.bpDiastolic,
           ifaTablets: finalIfa !== null && finalIfa !== undefined ? finalIfa : prev.ifaTablets,
+          ifaStatus: geminiExtracted.ifaStatus || prev.ifaStatus,
+          gestationalWeeks: geminiExtracted.gestationalWeeks ?? prev.gestationalWeeks,
+          childAgeDays: geminiExtracted.babyAgeDays ?? prev.childAgeDays,
+          lastAncDate: geminiExtracted.lastAncDate || prev.lastAncDate,
           vaccinationsGiven: vaccs.length > 0 ? vaccs : (geminiExtracted?.vaccinationsGiven || prev.vaccinationsGiven),
           fieldStates: updatedStates,
           evidenceTrail: updatedEvidence,
@@ -405,43 +699,97 @@ export default function App() {
 
       // Voice Response & Read-Back Strategy
       if (dResult.decision === 'FLAG') {
-        // Immediate fixed PHC emergency line plays!
-        speak(currentLang.spoken.referral_line, language, voice);
+        speak(`${beneficiaryAnnouncement}Please refer to the PHC now.`, 'en-IN', voice);
         setStepState('confirm');
       } else if (isDisambiguate) {
         // Disambiguation prompt already spoken above
         setStepState('confirm');
       } else if (parsedWeight.isConfusable && parsedWeight.confusablePrompt) {
         // Confusable sound-alike guard (e.g. saat vs saath)
-        speak(parsedWeight.confusablePrompt, language, voice);
+        speak(`${beneficiaryAnnouncement}${parsedWeight.confusablePrompt}`, utteranceLanguage, voice, () => {
+          void startRecordingRef.current(utteranceLanguage);
+        });
         setActiveQuestion(parsedWeight.confusablePrompt);
         setStepState('confirm');
       } else if (dResult.decision === 'ASK' && dResult.clarificationQuestions.length > 0) {
         // Targeted clarification for hedged / unknown symptom
         const q = dResult.clarificationQuestions[0];
-        speak(q, language, voice);
+        speak(`${beneficiaryAnnouncement}${q}`, utteranceLanguage, voice, () => {
+          void startRecordingRef.current(utteranceLanguage);
+        });
         setActiveQuestion(q);
         setStepState('confirm');
-      } else if (parsedWeight.value === null && !lower.includes('vajan') && !lower.includes('weight')) {
-        // Missing weight field
-        speak(currentLang.spoken.ask_weight, language, voice);
-        setActiveQuestion(currentLang.spoken.ask_weight);
+      } else if (!matchedName && !geminiExtracted.beneficiaryName && !formData.beneficiaryName) {
+        const prompt = currentLang.spoken.ask_beneficiary_id;
+        speak(`${beneficiaryAnnouncement}${prompt}`, utteranceLanguage, voice, () => {
+          void startRecordingRef.current(utteranceLanguage);
+        });
+        setActiveQuestion(prompt);
+        setStepState('confirm');
+      } else if (
+        (parsedWeight.value === null && geminiExtracted.weight === null && !formData.weight) ||
+        parsedWeight.state === 'uncertain' ||
+        geminiExtracted.confidence.weight === 'uncertain'
+      ) {
+        const prompt = currentLang.spoken.ask_weight;
+        speak(`${beneficiaryAnnouncement}${prompt}`, utteranceLanguage, voice, () => {
+          void startRecordingRef.current(utteranceLanguage);
+        });
+        setActiveQuestion(prompt);
+        setStepState('confirm');
+      } else if (
+        ((!bpSys || !bpDia) && (!formData.bpSystolic || !formData.bpDiastolic)) ||
+        bpUncertain
+      ) {
+        const prompt = currentLang.spoken.ask_bp;
+        speak(`${beneficiaryAnnouncement}${prompt}`, utteranceLanguage, voice, () => {
+          void startRecordingRef.current(utteranceLanguage);
+        });
+        setActiveQuestion(prompt);
+        setStepState('confirm');
+      } else if (!geminiExtracted.ifaStatus && ifaCount === null && !formData.ifaTablets) {
+        const prompt = currentLang.spoken.ask_ifa;
+        speak(`${beneficiaryAnnouncement}${prompt}`, utteranceLanguage, voice, () => {
+          void startRecordingRef.current(utteranceLanguage);
+        });
+        setActiveQuestion(prompt);
         setStepState('confirm');
       } else {
         // Read-back numbers, then short "baaki sab theek, save karun?"
         let readback = '';
-        if (parsedWeight.value) {
-          readback += `Weight ${parsedWeight.value} kilo. `;
+        const readbackWeight = parsedWeight.value ?? geminiExtracted.weight ?? formData.weight;
+        const readbackSys = bpSys ?? formData.bpSystolic;
+        const readbackDia = bpDia ?? formData.bpDiastolic;
+        if (readbackWeight) {
+          readback += `Weight ${readbackWeight} kilo. `;
         }
-        if (bpSys && bpDia) {
-          readback += `BP ${bpSys} by ${bpDia}. `;
+        if (readbackSys && readbackDia) {
+          readback += `BP ${readbackSys} by ${readbackDia}. `;
         }
         readback += currentLang.spoken.save_confirm;
-        speak(readback, language, voice);
+        setActiveQuestion(currentLang.spoken.save_confirm);
+        awaitingSaveConfirmationRef.current = true;
+        void startRecordingRef.current(utteranceLanguage);
+        speak(`${beneficiaryAnnouncement}${readback}`, utteranceLanguage, voice, () => {
+          void startRecordingRef.current(utteranceLanguage);
+        });
         setStepState('confirm');
       }
     },
-    [language, voice, disambiguationState, speak, isPlaying, stopAudio, addJudgeLog]
+    [
+      language,
+      voice,
+      disambiguationState,
+      newBeneficiaries,
+      formData,
+      stepState,
+      activeQuestion,
+      speak,
+      isPlaying,
+      stopAudio,
+      addJudgeLog,
+      createSyntheticBeneficiary,
+    ]
   );
 
   const handleTranscriptChunk = useCallback(
@@ -451,10 +799,20 @@ export default function App() {
         addJudgeLog('STT_CHUNK', `Transcript chunk from ${metadata.engine || 'Gnani'}`, metadata);
       }
       if (isFinal) {
-        processUtterance(text);
+        const finalText = text.trim();
+        const isSpokenCorrection = /^(no|nahi|illi|galat|correction)\b/i.test(finalText) ||
+          /change weight/i.test(finalText);
+        const isSaveConfirmation = awaitingSaveConfirmationRef.current &&
+          /^(yes|yeah|yep|correct|okay|ok|save|haan|हां|हाँ|ಹೌದು)\b/i.test(finalText);
+        if (isPlaying && !isSpokenCorrection && !isSaveConfirmation) return;
+        if (finalText && finalText !== lastProcessedTranscriptRef.current) {
+          lastProcessedTranscriptRef.current = finalText;
+          stopRecordingRef.current();
+          void processUtterance(finalText);
+        }
       }
     },
-    [processUtterance, addJudgeLog]
+    [processUtterance, addJudgeLog, isPlaying]
   );
 
   const {
@@ -466,6 +824,8 @@ export default function App() {
     startRecording,
     stopRecording,
   } = useAudioRecorder(handleTranscriptChunk, testModeEnabled);
+  startRecordingRef.current = startRecording;
+  stopRecordingRef.current = stopRecording;
 
   // Toggle Microphone
   const handleToggleMic = () => {
@@ -473,15 +833,21 @@ export default function App() {
     if (isPlaying) {
       stopAudio();
       addJudgeLog('BARGE_IN', 'Agent speech interrupted instantly by user');
+      if (!isRecording) {
+        setStepState('listening');
+        void startRecording(language);
+        return;
+      }
     }
 
     if (isRecording) {
       stopRecording();
-      if (transcript) {
-        processUtterance(transcript);
+      if (transcript.trim() && transcript.trim() !== lastProcessedTranscriptRef.current) {
+        lastProcessedTranscriptRef.current = transcript.trim();
+        void processUtterance(transcript.trim());
       }
     } else {
-      const currentLang = LANGUAGE_CATALOG[language] || LANGUAGE_CATALOG['hi-IN'];
+      const currentLang = LANGUAGE_CATALOG[language] || LANGUAGE_CATALOG['en-IN'];
       // First turn AI disclosure:
       speak(currentLang.spoken.ai_disclosure, language, voice, () => {
         startRecording(language);
@@ -495,6 +861,9 @@ export default function App() {
   const handleRunDemoScenario = (scenario: DemoScenario) => {
     stopAudio();
     stopRecording();
+    awaitingSaveConfirmationRef.current = false;
+    lastProcessedTranscriptRef.current = '';
+    visitTranscriptRef.current = '';
     setTranscript(scenario.spokenText);
     setLanguage(scenario.language as LanguageCode);
     addJudgeLog('DEMO_SCENARIO_RUN', `${scenario.tag}: ${scenario.title}`);
@@ -504,7 +873,8 @@ export default function App() {
   // Save Record
   const handleSaveRecord = async () => {
     stopAudio();
-    const currentLang = LANGUAGE_CATALOG[language] || LANGUAGE_CATALOG['hi-IN'];
+    awaitingSaveConfirmationRef.current = false;
+    const currentLang = LANGUAGE_CATALOG[language] || LANGUAGE_CATALOG['en-IN'];
     const followups = generateFollowups(
       formData.visitType || 'ANC',
       formData.gestationalWeeks,
@@ -512,14 +882,26 @@ export default function App() {
       formData.ifaTablets
     );
 
+    if (!formData.beneficiaryName || !formData.beneficiaryId) {
+      setWorkflowError({
+        message: 'A beneficiary must be identified before this visit can be saved.',
+        canRetry: true,
+      });
+      return;
+    }
+
+    const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 16);
+    const recordId = `REC-${Date.now()}`;
     const recordPayload = {
-      timestamp: new Date().toISOString(),
-      beneficiaryName: formData.beneficiaryName || 'Sita Devi',
-      beneficiaryId: formData.beneficiaryId || 'BEN-001',
+      id: recordId,
+      timestamp,
+      beneficiaryName: formData.beneficiaryName,
+      beneficiaryId: formData.beneficiaryId,
       village: formData.village || 'Rampur',
-      houseNo: formData.houseNo || '12',
+      houseNo: formData.houseNo || 'Unknown',
       visitType: formData.visitType || 'ANC',
       weight: formData.weight,
+      clinicalDetails: extractedJson,
       bp: formData.bpSystolic && formData.bpDiastolic ? `${formData.bpSystolic}/${formData.bpDiastolic}` : null,
       isFlagged: dangerResult?.decision === 'FLAG',
       flaggedSigns: dangerResult?.flaggedSigns || [],
@@ -529,56 +911,60 @@ export default function App() {
     };
 
     // Encrypt record with ENCRYPTION_KEY via backend
-    let encryptedToken = `LOCAL_ENC_${Math.random().toString(36).substring(2, 10)}`;
     try {
       const encRes = await fetch('/api/records/encrypt', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(recordPayload),
       });
-      if (encRes.ok) {
-        const encData = await encRes.json();
-        encryptedToken = encData.encryptedToken;
+      const encData = await encRes.json();
+      if (!encRes.ok || typeof encData.encryptedToken !== 'string') {
+        throw new Error(encData.error || 'Encrypted record storage failed.');
       }
-    } catch {}
 
-    const newRecord: SavedVisitRecord = {
-      id: `REC-${Date.now()}`,
-      timestamp: new Date().toISOString().replace('T', ' ').substring(0, 16),
-      beneficiaryName: recordPayload.beneficiaryName,
-      beneficiaryId: recordPayload.beneficiaryId,
-      village: recordPayload.village,
-      houseNo: recordPayload.houseNo,
-      visitType: recordPayload.visitType,
-      weight: recordPayload.weight,
-      bp: recordPayload.bp,
-      isFlagged: recordPayload.isFlagged,
-      flaggedSigns: recordPayload.flaggedSigns,
-      referralSlip: recordPayload.referralSlip,
-      encryptedToken,
-      transcript: recordPayload.transcript,
-      followups,
-    };
+      const newRecord: SavedVisitRecord = {
+        ...recordPayload,
+        id: recordId,
+        timestamp,
+        isFlagged: recordPayload.isFlagged,
+        flaggedSigns: recordPayload.flaggedSigns,
+        referralSlip: recordPayload.referralSlip,
+        encryptedToken: encData.encryptedToken,
+        transcript: recordPayload.transcript,
+        followups,
+      };
 
-    const updated = [newRecord, ...savedRecords];
-    setSavedRecords(updated);
-    try {
-      localStorage.setItem('asha_saved_records', JSON.stringify(updated));
-    } catch {}
+      const updated = [newRecord, ...savedRecords];
+      const stored = JSON.parse(localStorage.getItem('asha_saved_records') || '[]');
+      localStorage.setItem('asha_saved_records', JSON.stringify([
+        { id: recordId, timestamp, encryptedToken: encData.encryptedToken },
+        ...(Array.isArray(stored) ? stored : []),
+      ]));
+      setSavedRecords(updated);
 
-    setSavedFollowups(followups);
-    setStepState('saved');
+      setSavedFollowups(followups);
+      setStepState('saved');
+      setWorkflowError(null);
 
-    speak(currentLang.spoken.record_saved, language, voice);
-    addJudgeLog('RECORD_SAVED_ENCRYPTED', `Saved record for ${newRecord.beneficiaryName} (AES-256 Encrypted)`, newRecord);
+      const spokenFollowups = followups.map((item) => `${item.item}, due ${item.dueDate}`).join('. ');
+      speak(`${currentLang.spoken.record_saved} ${spokenFollowups}`, language, voice);
+      addJudgeLog('RECORD_SAVED_ENCRYPTED', `Saved encrypted record for ${newRecord.beneficiaryName}.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Encrypted record storage failed.';
+      setWorkflowError({ message, canRetry: true });
+    }
   };
+  saveRecordRef.current = handleSaveRecord;
 
   // Next Beneficiary
   const handleNextBeneficiary = () => {
     stopAudio();
+    awaitingSaveConfirmationRef.current = false;
+    lastProcessedTranscriptRef.current = '';
     setFormData(INITIAL_FORM_DATA);
     setDangerResult(null);
     setTranscript('');
+    visitTranscriptRef.current = '';
     setExtractedJson(null);
     setSavedFollowups(null);
     setActiveQuestion(null);
@@ -589,7 +975,10 @@ export default function App() {
   // Re-record
   const handleReRecord = () => {
     stopAudio();
+    awaitingSaveConfirmationRef.current = false;
+    lastProcessedTranscriptRef.current = '';
     setTranscript('');
+    visitTranscriptRef.current = '';
     setDangerResult(null);
     setExtractedJson(null);
     setStepState('listening');
@@ -600,6 +989,9 @@ export default function App() {
   const handlePurgeAllData = () => {
     stopAudio();
     stopRecording();
+    awaitingSaveConfirmationRef.current = false;
+    lastProcessedTranscriptRef.current = '';
+    visitTranscriptRef.current = '';
     setSavedRecords([]);
     setFormData(INITIAL_FORM_DATA);
     setDangerResult(null);
@@ -611,11 +1003,20 @@ export default function App() {
       localStorage.removeItem('asha_saved_records');
       localStorage.removeItem('asha_hints_dismissed');
     } catch {}
+    void fetch('/api/beneficiaries', { method: 'DELETE' })
+      .then((response) => {
+        if (!response.ok) throw new Error('Could not purge synthetic beneficiaries.');
+        setNewBeneficiaries([]);
+      })
+      .catch(() => setWorkflowError({
+        message: 'Synthetic beneficiaries could not be purged from the backend.',
+        canRetry: true,
+      }));
     addJudgeLog('PURGE_COMPLETE', 'All patient records and transcripts purged for Responsible AI compliance');
   };
 
-  const currentLangObj = LANGUAGE_CATALOG[language] || LANGUAGE_CATALOG['hi-IN'];
-  const activeError = sttError || ttsError;
+  const currentLangObj = LANGUAGE_CATALOG[language] || LANGUAGE_CATALOG['en-IN'];
+  const activeError = sttError || ttsError || workflowError;
 
   return (
     <div
@@ -662,6 +1063,9 @@ export default function App() {
         showJudgeView={showJudgeView}
         onToggleJudgeView={() => setShowJudgeView((p) => !p)}
         onOpenDemoScenarios={() => setShowDemoModal(true)}
+        healthOk={healthOk}
+        healthMessage={healthMessage}
+        onRetryHealth={() => void refreshHealth()}
       />
 
       {/* Visible Error Banner with Retry button if Gnani call fails */}
@@ -840,7 +1244,7 @@ export default function App() {
               {/* IFA Tablets Card */}
               <FieldCard
                 label="IFA Tablets (Iron Folic Acid)"
-                value={formData.ifaTablets}
+                value={formData.ifaTablets ?? formData.ifaStatus}
                 unit="tablets"
                 state={formData.fieldStates.ifa}
                 evidence={formData.evidenceTrail.ifa}
@@ -907,7 +1311,16 @@ export default function App() {
         )}
 
         {/* Tab 2: Saved Records Register */}
-        {activeTab === 'records' && <RecordsScreen records={savedRecords} />}
+        {activeTab === 'records' && (
+          <RecordsScreen
+            records={savedRecords}
+            beneficiaries={newBeneficiaries}
+            onAddBeneficiary={(name, houseNo, category) => {
+              const beneficiary = createSyntheticBeneficiary(name, houseNo, category);
+              addJudgeLog('NEW_BENEFICIARY_ADDED', `New synthetic/demo beneficiary ${beneficiary.name} added.`);
+            }}
+          />
+        )}
 
         {/* Tab 3: Settings Screen */}
         {activeTab === 'settings' && (

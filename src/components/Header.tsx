@@ -12,6 +12,9 @@ interface HeaderProps {
   showJudgeView: boolean;
   onToggleJudgeView: () => void;
   onOpenDemoScenarios: () => void;
+  healthOk: boolean;
+  healthMessage: string;
+  onRetryHealth: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -22,9 +25,12 @@ export const Header: React.FC<HeaderProps> = ({
   showJudgeView,
   onToggleJudgeView,
   onOpenDemoScenarios,
+  healthOk,
+  healthMessage,
+  onRetryHealth,
 }) => {
   const { isInstallable, install, isIOS } = usePWAInstall();
-  const currentLangObj = LANGUAGE_CATALOG[currentLanguage] || LANGUAGE_CATALOG['hi-IN'];
+  const currentLangObj = LANGUAGE_CATALOG[currentLanguage] || LANGUAGE_CATALOG['en-IN'];
 
   return (
     <header className="sticky top-0 z-40 bg-white/95 backdrop-blur border-b border-teal-100 shadow-xs px-4 py-2.5">
@@ -36,6 +42,19 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
           <div>
             <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={onRetryHealth}
+                className="flex items-center gap-1.5 text-[10px] font-semibold text-gray-700"
+                title={healthMessage}
+                aria-label={healthMessage}
+              >
+                <span className={`w-2.5 h-2.5 rounded-full ${healthOk ? 'bg-emerald-500' : 'bg-red-600'}`} />
+                <span className={healthOk ? 'text-emerald-700' : 'text-red-700'}>
+                  {healthOk ? 'Voice ready' : 'Setup required'}
+                </span>
+              </button>
+
               <h1 className="text-lg font-bold tracking-tight text-gray-900 leading-none">
                 ASHA Vaani
               </h1>

@@ -38,6 +38,7 @@ export interface BeneficiaryRecord {
   child_age_days?: number;
   age: number;
   hb?: number;
+  isNew?: boolean;
 }
 
 export interface VisitFormData {
@@ -53,6 +54,7 @@ export interface VisitFormData {
   bpSystolic: number | null;
   bpDiastolic: number | null;
   ifaTablets: number | null;
+  ifaStatus: string | null;
   vaccinationsGiven: string[];
   vaccinationsDue: string[];
   lastAncDate: string | null;
