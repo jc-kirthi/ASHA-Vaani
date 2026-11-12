@@ -36,15 +36,23 @@ python3 scripts/eval.py
 
 ## 2. Environment Variables
 
-Copy `.env.example` to `.env` in the project root and set values locally. Never commit `.env`.
+Keep one local `.env` file in the project root and set values there. Never commit `.env`.
 
 - `GNANI_API_KEY`: Subscription key for Gnani Prisma v3.0 STT and Timbre v3.0 TTS (`https://api.vachana.ai`). Kept strictly on the backend.
 - `LLM_API_KEY`: Google Gemini API key. Gemini is the primary structured extractor.
 - `LLM_MODEL`: Gemini model identifier available to your API key. Set this explicitly; the application does not assume a model name.
 - `FALLBACK_API_KEY`: Groq API key. Optional, but required to use the Groq fallback.
-- `FALLBACK_BASE_URL`: Groq-compatible API base URL; defaults in `.env.example` to `https://api.groq.com/openai/v1`.
-- `FALLBACK_MODEL`: Optional active, fast, non-reasoning Groq chat model. Run `npm run check:llm` to discover and verify a model; set the reported identifier here.
+- `FALLBACK_BASE_URL`: Groq-compatible API base URL, typically `https://api.groq.com/openai/v1`.
+- `FALLBACK_MODEL`: Active Groq chat model identifier. Set it explicitly; `npm run check:llm` can check the model against the provider account.
 - `ENCRYPTION_KEY`: 32-byte secret key used for AES-256-GCM authenticated encryption of sensitive beneficiary health records at rest.
+
+Example local provider settings (put real keys only in the ignored `.env` file):
+
+```env
+LLM_MODEL=gemini-3.8-flash
+FALLBACK_BASE_URL=https://api.groq.com/openai/v1
+FALLBACK_MODEL=llama-3.3-70b-versatile
+```
 
 `/api/health` reports key-presence booleans, service-check results, and the port; it never returns key values. `npm run check:llm` sends a small synthetic extraction request and prints provider status, model, and latency. It does not modify visit data.
 
@@ -66,7 +74,7 @@ Browser Mic (16kHz PCM)
 
 The LLM providers receive only the current transcript, selected language, and the shared extraction schema. They extract fields only; danger decisions are made by the deterministic engine. HTTP 429/503 responses open that provider's circuit for at least 60 seconds; invalid structured output is retried once before switching providers. Other errors are not retried, and provider attempts are time-limited to keep the live turn responsive. Extracted values are validated before they reach the turn pipeline.
 
-The fallback model is discovered from the configured provider's `/models` response; the application does not hardcode a Groq model. Automatic selection looks for a model identifier containing `instant` and excludes reasoning-model identifiers (and models explicitly marked inactive). Otherwise configure `FALLBACK_MODEL` explicitly to a model available to your account. The provider model-list API does not expose a measured latency guarantee.
+When `FALLBACK_MODEL` is set, the provider adapter verifies that it is available from the configured provider's `/models` response before using it. If it is unset, automatic selection looks for a model identifier containing `instant` and excludes reasoning-model identifiers (and models explicitly marked inactive). The provider model-list API does not expose a measured latency guarantee.
 
 ---
 

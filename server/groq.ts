@@ -193,7 +193,7 @@ export async function extractWithGroq(options: {
 }
 
 export async function warmGroqModelCatalog(): Promise<void> {
-  if (!process.env.FALLBACK_API_KEY) return;
+  if (!process.env.FALLBACK_API_KEY?.trim() || process.env.FALLBACK_MODEL?.trim()) return;
   await discoverGroqModels();
 }
 
