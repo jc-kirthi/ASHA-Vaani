@@ -289,7 +289,7 @@ export default function App() {
       ? missingKeys.map((key) => `${key} is missing. Put ${key} in the .env file in the project root, then restart the server.`).join(' ')
       : !serviceHealth.stt_ok || !serviceHealth.tts_ok
         ? 'Gnani Prisma or Timbre health check failed. Check GNANI_API_KEY and connectivity, then retry.'
-        : 'A backend service check failed. Review server configuration and retry.';
+        : 'Voice services and encrypted storage are ready.';
 
   // Hooks
   const {
