@@ -105,7 +105,7 @@ app.get('/api/config', (req, res) => {
   res.json({
     sttModel: 'prisma-v3.0',
     ttsModel: 'timbre-v3.0',
-    llmModel: 'gemini-2.5-flash',
+    llmModel: 'gemini-3.8-flash',
     sttEndpoint: 'wss://api.vachana.ai/stt/v3/stream',
     ttsEndpoint: 'wss://api.vachana.ai/api/v1/tts',
     testMode: process.env.LLM_PROVIDER === 'mock',

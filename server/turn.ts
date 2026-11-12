@@ -469,7 +469,7 @@ function emptyExtraction(): ExtractedVisitData {
     gestationalWeeks: null, babyAgeDays: null, childAgeDays: null, weight: null,
     bpSystolic: null, bpDiastolic: null, hemoglobin: null, lastAncDate: null,
     ttStatus: null, ttLastDoseDate: null, ifaStatus: null, ifaTablets: null, vaccinationsGiven: [], symptoms: [],
-    notes: '', evidence: {}, confidence: {}, extractionStatus: 'confirmed', modelUsed: process.env.LLM_PROVIDER === 'mock' ? 'mock' : 'gemini-2.5-flash',
+    notes: '', evidence: {}, confidence: {}, extractionStatus: 'confirmed', modelUsed: process.env.LLM_PROVIDER === 'mock' ? 'mock' : 'gemini-3.8-flash',
   };
 }
 

@@ -281,7 +281,7 @@ async function attemptGeminiCall(
   transcript: string
 ): Promise<ExtractedVisitData> {
   const response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash',
+    model: 'gemini-3.8-flash',
     contents: transcript,
     config: {
       responseMimeType: 'application/json',
@@ -390,7 +390,7 @@ export function validateExtraction(value: unknown): ExtractedVisitData {
     evidence,
     confidence,
     extractionStatus: 'confirmed',
-    modelUsed: 'gemini-2.5-flash',
+    modelUsed: 'gemini-3.8-flash',
   };
 }
 
@@ -426,6 +426,6 @@ function uncertainExtraction(): ExtractedVisitData {
     evidence: {},
     confidence,
     extractionStatus: 'uncertain',
-    modelUsed: 'gemini-2.5-flash',
+    modelUsed: 'gemini-3.8-flash',
   };
 }
