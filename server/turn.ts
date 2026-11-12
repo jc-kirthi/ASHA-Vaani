@@ -7,7 +7,11 @@ import { parseWeight } from '../src/engine/numberEngine.ts';
 import { SYNTHETIC_ROSTER } from '../src/data/rosterData.ts';
 import type { BeneficiaryRecord, DangerEngineResult, FollowupItem } from '../src/types/index.ts';
 import { decryptPayload, encryptPayload } from './crypto.ts';
-import { extractWithGemini, type ExtractedVisitData } from './extractor.ts';
+import {
+  extractWithGemini,
+  GeminiUnavailableError,
+  type ExtractedVisitData,
+} from './extractor.ts';
 
 type FieldValue = unknown;
 export interface TurnField {
@@ -44,6 +48,7 @@ export interface TurnResponse {
   test_mode: boolean;
   roster_label: string | null;
   rule: string;
+  llm_status: 'ready' | 'retried' | 'busy';
 }
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -207,12 +212,15 @@ function buildReadBack(fields: TurnFields, language: string): string {
   return `${parts.join('. ')}. ${saveText}`.trim();
 }
 
-export async function processTurn(input: {
-  session_id: string;
-  transcript: string;
-  language: string;
-  corrections?: Record<string, unknown>;
-}): Promise<TurnResponse> {
+export async function processTurn(
+  input: {
+    session_id: string;
+    transcript: string;
+    language: string;
+    corrections?: Record<string, unknown>;
+  },
+  extract = extractWithGemini
+): Promise<TurnResponse> {
   const text = input.transcript.trim();
   if (!input.session_id || (!text && !input.corrections)) {
     throw new Error('session_id and transcript or field corrections are required.');
@@ -287,9 +295,38 @@ export async function processTurn(input: {
   } else if (pendingField === 'weight') {
     extractionText += ` weight ${text}`;
   }
-  const extracted = text
-    ? await extractWithGemini(extractionText, language)
-    : emptyExtraction();
+  let extracted: ExtractedVisitData;
+  try {
+    extracted = text ? await extract(extractionText, language) : emptyExtraction();
+  } catch (error) {
+    if (!(error instanceof GeminiUnavailableError)) throw error;
+    sessions.set(session.id, session);
+    const failedExtraction = {
+      ...emptyExtraction(),
+      extractionStatus: 'uncertain' as const,
+      modelUsed: error.model,
+    };
+    const retryMessage = language === 'hi-IN'
+      ? 'माफ़ कीजिए, मैं समझ नहीं पाया। कृपया एक बार फिर कहें।'
+      : language === 'kn-IN'
+        ? 'ಕ್ಷಮಿಸಿ, ನನಗೆ ಅರ್ಥವಾಗಲಿಲ್ಲ. ದಯವಿಟ್ಟು ಮತ್ತೊಮ್ಮೆ ಹೇಳಿ.'
+        : 'Sorry, I did not catch that. Please say it once more.';
+    const danger = evaluateDangerSigns(session.transcript, language);
+    return response(
+      session,
+      failedExtraction,
+      danger,
+      [retryMessage],
+      retryMessage,
+      [],
+      null,
+      null,
+      null,
+      null,
+      danger.ruleFired,
+      'busy'
+    );
+  }
   mergeExtraction(session.fields, extracted, text);
 
   if (pendingField === 'houseNo' && session.duplicateCandidates.length) {
@@ -485,6 +522,7 @@ function response(
   readBackText: string | null = null,
   rosterLabel: string | null = null,
   rule = danger.ruleFired,
+  llmStatus: TurnResponse['llm_status'] = extracted.llmStatus || 'ready',
 ): TurnResponse {
   return {
     session_id: session.id,
@@ -503,6 +541,7 @@ function response(
     test_mode: process.env.LLM_PROVIDER === 'mock',
     roster_label: rosterLabel,
     rule,
+    llm_status: llmStatus,
   };
 }
 

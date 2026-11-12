@@ -1,5 +1,5 @@
 import React from 'react';
-import { X, Cpu, Clock, CheckCircle, ShieldAlert, FileCode, Activity, Radio } from 'lucide-react';
+import { X, Cpu, Clock, CheckCircle, ShieldAlert, FileCode, Activity, Radio, AlertTriangle } from 'lucide-react';
 import { VisitFormData, DangerEngineResult, NoiseMode, JudgeLogEvent } from '../types';
 
 interface JudgeViewProps {
@@ -140,6 +140,16 @@ export const JudgeView: React.FC<JudgeViewProps> = ({
             <FileCode className="w-3.5 h-3.5" />
             Extracted Clinical JSON
           </div>
+          {extractedJson?.llm_status && extractedJson.llm_status !== 'ready' && (
+            <div className="flex items-start gap-1.5 rounded-lg border border-amber-700 bg-amber-950/60 p-2 text-[10px] text-amber-200">
+              <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+              <span>
+                LLM busy, retrying
+                {extractedJson.llm_status === 'busy' && '. Transcript retained; please say it once more.'}
+                {extractedJson.llm_status === 'retried' && ' (recovered).'}
+              </span>
+            </div>
+          )}
           <pre className="p-2 bg-gray-950 rounded-lg overflow-x-auto text-[10px] text-emerald-300 max-h-44 border border-gray-800">
             {JSON.stringify(
               extractedJson || {

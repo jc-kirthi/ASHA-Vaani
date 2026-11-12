@@ -102,6 +102,7 @@ interface PipelineTurnResponse {
   test_mode: boolean;
   roster_label: string | null;
   rule: string;
+  llm_status: 'ready' | 'retried' | 'busy';
 }
 
 export default function App() {
@@ -391,7 +392,10 @@ export default function App() {
         visitTranscriptRef.current = result.transcript;
         setTranscript(result.transcript);
         setPipelineFields(result.fields);
-        setExtractedJson(result.extracted);
+        setExtractedJson({
+          ...result.extracted,
+          llm_status: result.llm_status,
+        });
         setDangerResult(result.danger);
         setActiveQuestion(result.questions[0] || null);
         awaitingSaveConfirmationRef.current = Boolean(result.read_back_text);
@@ -405,6 +409,12 @@ export default function App() {
           rule: result.rule,
           decision: result.danger.decision,
         });
+        if (result.llm_status !== 'ready') {
+          addJudgeLog('LLM_RETRY', 'LLM busy, retrying', {
+            status: result.llm_status,
+            model: result.extracted.modelUsed,
+          });
+        }
 
         const field = (name: string) => result.fields[name];
         const value = (name: string) => field(name)?.value;

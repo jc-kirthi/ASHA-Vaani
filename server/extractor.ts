@@ -35,6 +35,9 @@ export interface ExtractedVisitData {
   confidence: Record<string, 'high' | 'uncertain' | 'missing'>;
   extractionStatus: 'confirmed' | 'uncertain';
   modelUsed: string;
+  llmStatus?: 'ready' | 'retried';
+  llmRetries?: number;
+  llmBackupUsed?: boolean;
 }
 
 const responseJsonSchema = {
@@ -107,6 +110,146 @@ const FIELD_NAMES = [
 
 class InvalidExtractionError extends Error {}
 
+const LLM_TOTAL_TIMEOUT_MS = 6_000;
+const LLM_ATTEMPT_TIMEOUT_MS = 1_000;
+const LLM_BACKOFF_MS = [500, 1_000];
+const DEFAULT_LLM_MODEL = 'gemini-3.8-flash';
+const DEFAULT_LLM_MODEL_BACKUP = 'gemini-3.5-flash-lite';
+
+export class GeminiUnavailableError extends Error {
+  constructor(
+    readonly status: string,
+    readonly model: string,
+    readonly retries: number,
+    readonly backupTried: boolean
+  ) {
+    super('Gemini extraction unavailable.');
+    this.name = 'GeminiUnavailableError';
+  }
+}
+
+export interface GeminiResilienceResult<T> {
+  value: T;
+  model: string;
+  attempts: number;
+  backupUsed: boolean;
+}
+
+interface GeminiResilienceOptions<T> {
+  primaryModel: string;
+  backupModel: string;
+  invoke: (model: string, timeoutMs: number, signal: AbortSignal) => Promise<T>;
+  delay?: (ms: number) => Promise<void>;
+  logFailure?: (status: string, model: string) => void;
+}
+
+export async function runGeminiWithResilience<T>(
+  options: GeminiResilienceOptions<T>
+): Promise<GeminiResilienceResult<T>> {
+  const deadline = Date.now() + LLM_TOTAL_TIMEOUT_MS;
+  const delay = options.delay || ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const logFailure = options.logFailure || ((status, model) => {
+    console.warn(`[LLM] Gemini request failed status=${status} model=${model}`);
+  });
+  let attempts = 0;
+  let lastStatus = 'UNAVAILABLE';
+  let lastModel = options.primaryModel;
+  let backupTried = false;
+
+  const tryModel = async (model: string): Promise<GeminiResilienceResult<T> | null> => {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return null;
+    attempts += 1;
+    lastModel = model;
+    const timeoutMs = Math.min(LLM_ATTEMPT_TIMEOUT_MS, remaining);
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const value = await Promise.race([
+        options.invoke(model, timeoutMs, controller.signal),
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => {
+            controller.abort();
+            reject(new GeminiAttemptTimeoutError());
+          }, timeoutMs);
+        }),
+      ]);
+      return { value, model, attempts, backupUsed: model !== options.primaryModel };
+    } catch (error) {
+      lastStatus = getGeminiFailureStatus(error);
+      logFailure(lastStatus, model);
+      return null;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  };
+
+  const execute = async (): Promise<GeminiResilienceResult<T>> => {
+    for (let primaryAttempt = 0; primaryAttempt < 3; primaryAttempt += 1) {
+      const result = await tryModel(options.primaryModel);
+      if (result) return result;
+      if (!isRetryableGeminiStatus(lastStatus) || primaryAttempt === 2) break;
+      const waitMs = LLM_BACKOFF_MS[primaryAttempt];
+      if (Date.now() + waitMs >= deadline) break;
+      await delay(waitMs);
+    }
+
+    backupTried = options.backupModel !== options.primaryModel && Date.now() < deadline;
+    if (backupTried) {
+      const result = await tryModel(options.backupModel);
+      if (result) return result;
+    }
+
+    throw new GeminiUnavailableError(lastStatus, lastModel, attempts, backupTried);
+  };
+
+  let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      execute(),
+      new Promise<never>((_resolve, reject) => {
+        deadlineTimer = setTimeout(
+          () => reject(new GeminiUnavailableError(lastStatus, lastModel, attempts, backupTried)),
+          LLM_TOTAL_TIMEOUT_MS
+        );
+      }),
+    ]);
+  } finally {
+    if (deadlineTimer) clearTimeout(deadlineTimer);
+  }
+}
+
+class GeminiAttemptTimeoutError extends Error {}
+
+function getGeminiFailureStatus(error: unknown): string {
+  if (error instanceof GeminiAttemptTimeoutError) return 'TIMEOUT';
+  if (!error || typeof error !== 'object') return 'NETWORK';
+  const candidate = error as {
+    status?: unknown;
+    code?: unknown;
+    message?: unknown;
+    cause?: unknown;
+    error?: unknown;
+  };
+  const statusValue = Number(candidate.status ?? candidate.code);
+  if (statusValue === 429 || statusValue === 503) return String(statusValue);
+  const code = String(candidate.code || '').toUpperCase();
+  const message = String(candidate.message || '').toLowerCase();
+  if (
+    ['ETIMEDOUT', 'ESOCKETTIMEDOUT', 'UND_ERR_CONNECT_TIMEOUT', 'ABORT_ERR'].includes(code) ||
+    /timed?\s*out|timeout|aborted/.test(message)
+  ) {
+    return 'TIMEOUT';
+  }
+  if (candidate.cause) return getGeminiFailureStatus(candidate.cause);
+  if (candidate.error) return getGeminiFailureStatus(candidate.error);
+  return Number.isFinite(statusValue) && statusValue > 0 ? String(statusValue) : 'ERROR';
+}
+
+function isRetryableGeminiStatus(status: string): boolean {
+  return status === '429' || status === '503' || status === 'TIMEOUT';
+}
+
 export async function extractWithGemini(
   transcript: string,
   lang: string = 'en-IN'
@@ -119,21 +262,26 @@ export async function extractWithGemini(
     throw new Error('LLM_API_KEY is missing. Put LLM_API_KEY in the .env file in the project root, then restart the server.');
   }
 
-  const ai = new GoogleGenAI({ apiKey });
-  let firstError: unknown;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      return await attemptGeminiCall(ai, transcript);
-    } catch (error) {
-      if (!(error instanceof InvalidExtractionError)) throw error;
-      firstError = error;
-    }
-  }
-
-  if (firstError) {
-    return uncertainExtraction();
-  }
-  throw new Error('Gemini extraction failed.');
+  const primaryModel = process.env.LLM_MODEL || DEFAULT_LLM_MODEL;
+  const backupModel = process.env.LLM_MODEL_BACKUP || DEFAULT_LLM_MODEL_BACKUP;
+  const result = await runGeminiWithResilience({
+    primaryModel,
+    backupModel,
+    invoke: async (model, _timeoutMs, signal) => {
+      const ai = new GoogleGenAI({
+        apiKey,
+        httpOptions: { retryOptions: { attempts: 1 } },
+      });
+      return attemptGeminiCall(ai, transcript, model, signal);
+    },
+  });
+  return {
+    ...result.value,
+    modelUsed: result.model,
+    llmStatus: result.attempts > 1 ? 'retried' : 'ready',
+    llmRetries: result.attempts - 1,
+    llmBackupUsed: result.backupUsed,
+  };
 }
 
 export function extractWithMock(transcript: string, _lang = 'en-IN'): ExtractedVisitData {
@@ -278,27 +426,30 @@ export function extractWithMock(transcript: string, _lang = 'en-IN'): ExtractedV
 
 async function attemptGeminiCall(
   ai: GoogleGenAI,
-  transcript: string
+  transcript: string,
+  model: string,
+  abortSignal: AbortSignal
 ): Promise<ExtractedVisitData> {
   const response = await ai.models.generateContent({
-    model: 'gemini-3.8-flash',
+    model,
     contents: transcript,
     config: {
       responseMimeType: 'application/json',
       responseJsonSchema,
       temperature: 0.1,
+      abortSignal,
     },
   });
 
   try {
     const parsed: unknown = JSON.parse(response.text || '');
-    return validateExtraction(parsed);
+    return { ...validateExtraction(parsed), modelUsed: model };
   } catch {
     throw new InvalidExtractionError('Gemini returned invalid JSON.');
   }
 }
 
-export function validateExtraction(value: unknown): ExtractedVisitData {
+export function validateExtraction(value: unknown, modelUsed = DEFAULT_LLM_MODEL): ExtractedVisitData {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new InvalidExtractionError('Gemini returned a non-object response.');
   }
@@ -390,11 +541,11 @@ export function validateExtraction(value: unknown): ExtractedVisitData {
     evidence,
     confidence,
     extractionStatus: 'confirmed',
-    modelUsed: 'gemini-3.8-flash',
+    modelUsed,
   };
 }
 
-function uncertainExtraction(): ExtractedVisitData {
+function uncertainExtraction(modelUsed = DEFAULT_LLM_MODEL): ExtractedVisitData {
   const confidence = Object.fromEntries(
     FIELD_NAMES.map((name) => [name, 'uncertain'])
   ) as ExtractedVisitData['confidence'];
@@ -426,6 +577,6 @@ function uncertainExtraction(): ExtractedVisitData {
     evidence: {},
     confidence,
     extractionStatus: 'uncertain',
-    modelUsed: 'gemini-3.8-flash',
+    modelUsed,
   };
 }
