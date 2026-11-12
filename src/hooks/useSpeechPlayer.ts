@@ -5,7 +5,14 @@ export interface TTSErrorState {
   canRetry: boolean;
 }
 
-export function useSpeechPlayer(testModeEnabled: boolean = false) {
+interface SpeechRequest {
+  text: string;
+  langCode: string;
+  voiceName: string;
+  onComplete?: () => void;
+}
+
+export function useSpeechPlayer() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentCaption, setCurrentCaption] = useState<string | null>(null);
   const [lastLatencyMs, setLastLatencyMs] = useState<number>(0);
@@ -14,7 +21,7 @@ export function useSpeechPlayer(testModeEnabled: boolean = false) {
   const audioContextRef = useRef<AudioContext | null>(null);
   const currentSourceRef = useRef<AudioBufferSourceNode | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
-  const synthesisStartTimeRef = useRef<number>(0);
+  const lastRequestRef = useRef<SpeechRequest | null>(null);
 
   // Instant barge-in stop
   const stop = useCallback(() => {
@@ -31,11 +38,6 @@ export function useSpeechPlayer(testModeEnabled: boolean = false) {
         currentSourceRef.current.disconnect();
       } catch {}
       currentSourceRef.current = null;
-    }
-
-    // Stop browser speech synthesis if in test mode
-    if (window.speechSynthesis) {
-      window.speechSynthesis.cancel();
     }
 
     setIsPlaying(false);
@@ -58,46 +60,12 @@ export function useSpeechPlayer(testModeEnabled: boolean = false) {
         return;
       }
 
+      lastRequestRef.current = { text, langCode, voiceName, onComplete };
       setCurrentCaption(text);
       setIsPlaying(true);
       const startTime = performance.now();
-      synthesisStartTimeRef.current = startTime;
 
-      // Branch A: TEST MODE (Browser SpeechSynthesis Emulator - strictly OFF by default)
-      if (testModeEnabled) {
-        if (!window.speechSynthesis) {
-          setIsPlaying(false);
-          setCurrentCaption(null);
-          if (onComplete) onComplete();
-          return;
-        }
-
-        const utterance = new SpeechSynthesisUtterance(text);
-        utterance.lang = langCode;
-        utterance.rate = 1.0;
-        utterance.pitch = 1.0;
-
-        utterance.onstart = () => {
-          setLastLatencyMs(Math.round(performance.now() - startTime));
-        };
-
-        utterance.onend = () => {
-          setIsPlaying(false);
-          setCurrentCaption(null);
-          if (onComplete) onComplete();
-        };
-
-        utterance.onerror = () => {
-          setIsPlaying(false);
-          setCurrentCaption(null);
-          if (onComplete) onComplete();
-        };
-
-        window.speechSynthesis.speak(utterance);
-        return;
-      }
-
-      // Branch B: PRODUCTION LIVE GNANI TIMBRE v3.0 STREAMING TTS PATH
+      // Gnani Timbre v3.0 TTS path
       const abortCtrl = new AbortController();
       abortControllerRef.current = abortCtrl;
 
@@ -173,11 +141,17 @@ export function useSpeechPlayer(testModeEnabled: boolean = false) {
           message: `Gnani Timbre v3.0 TTS failed: ${err.message}`,
           canRetry: true,
         });
-        if (onComplete) onComplete();
       }
     },
-    [stop, testModeEnabled]
+    [stop]
   );
+
+  const retry = useCallback(() => {
+    const request = lastRequestRef.current;
+    if (request) {
+      void speak(request.text, request.langCode, request.voiceName, request.onComplete);
+    }
+  }, [speak]);
 
   return {
     isPlaying,
@@ -186,6 +160,7 @@ export function useSpeechPlayer(testModeEnabled: boolean = false) {
     error,
     clearError: () => setError(null),
     speak,
+    retry,
     stop,
   };
 }

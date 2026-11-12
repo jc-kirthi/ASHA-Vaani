@@ -6,10 +6,7 @@ import { promises as fs } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
 import { synthesizeTimbreV3, warmTTSCache } from './server/gnani.ts';
-import { extractWithGemini } from './server/extractor.ts';
 import { encryptPayload, decryptPayload } from './server/crypto.ts';
-import { evaluateDangerSigns } from './src/engine/dangerEngine.ts';
-import { parseWeight } from './src/engine/numberEngine.ts';
 import type { BeneficiaryRecord } from './src/types/index.ts';
 import { processTurn } from './server/turn.ts';
 
@@ -116,71 +113,21 @@ app.get('/api/config', (req, res) => {
 });
 
 app.post('/api/turn', async (req, res) => {
-  const { session_id, transcript, language } = req.body;
+  const { session_id, transcript, language, corrections } = req.body;
   if (
     typeof session_id !== 'string' || !session_id.trim() ||
-    typeof transcript !== 'string' || !transcript.trim() ||
+    typeof transcript !== 'string' ||
+    ( !transcript.trim() && (!corrections || typeof corrections !== 'object' || Array.isArray(corrections)) ) ||
     typeof language !== 'string'
   ) {
     return res.status(400).json({ error: 'session_id, transcript, and language are required.' });
   }
   try {
-    res.json(await processTurn({ session_id, transcript, language }));
+    res.json(await processTurn({ session_id, transcript, language, corrections }));
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Visit turn processing failed.';
     res.status(502).json({ error: message, canRetry: true });
   }
-});
-
-// LLM Entity Extractor API
-app.post('/api/extract', async (req, res) => {
-  try {
-    const { transcript, lang } = req.body;
-    if (typeof transcript !== 'string' || !transcript.trim()) {
-      return res.status(400).json({ error: 'Missing transcript' });
-    }
-    const extracted = await extractWithGemini(transcript, lang || 'en-IN');
-    res.json(extracted);
-  } catch (err: any) {
-    console.error('Gemini extraction failed.');
-    res.status(502).json({ error: err.message || 'Gemini extraction failed.' });
-  }
-});
-
-app.post('/api/evaluate', (req, res) => {
-  const { transcript, lang, beneficiaryName, beneficiaryId, category } = req.body;
-  if (typeof transcript !== 'string' || !transcript.trim()) {
-    return res.status(400).json({ error: 'Missing transcript' });
-  }
-  const weightText = typeof req.body.weightText === 'string' ? req.body.weightText : '';
-  res.json({
-    danger: evaluateDangerSigns(
-      transcript,
-      typeof lang === 'string' ? lang : 'en-IN',
-      typeof beneficiaryName === 'string' ? beneficiaryName : 'Beneficiary',
-      typeof beneficiaryId === 'string' ? beneficiaryId : 'ID-Pending'
-    ),
-    weight: parseWeight(
-      weightText,
-      category === 'newborn' ? 'newborn' : 'adult',
-      typeof lang === 'string' ? lang : 'en-IN'
-    ),
-    bloodPressure: (() => {
-      const systolic = Number(req.body.bpSystolic);
-      const diastolic = Number(req.body.bpDiastolic);
-      if (!Number.isFinite(systolic) || !Number.isFinite(diastolic)) {
-        return { state: 'missing', plausible: false };
-      }
-      const plausible = systolic >= 70 && systolic <= 250 && diastolic >= 40 && diastolic <= 150;
-      return { state: plausible ? 'confirmed' : 'uncertain', plausible };
-    })(),
-    hemoglobin: (() => {
-      const value = Number(req.body.hemoglobin);
-      if (!Number.isFinite(value)) return { state: 'missing', plausible: false };
-      const plausible = value >= 3 && value <= 20;
-      return { state: plausible ? 'confirmed' : 'uncertain', plausible };
-    })(),
-  });
 });
 
 // TTS REST Endpoint (uses in-memory pre-synthesized cache)

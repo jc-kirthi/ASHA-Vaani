@@ -32,7 +32,6 @@ import {
 import { LANGUAGE_CATALOG } from './data/languageData';
 import { SYNTHETIC_ROSTER } from './data/rosterData';
 import { DangerEngineResult } from './types';
-import { generateFollowups } from './engine/followupEngine';
 
 import { useAudioRecorder, STTErrorState } from './hooks/useAudioRecorder';
 import { useSpeechPlayer, TTSErrorState } from './hooks/useSpeechPlayer';
@@ -80,6 +79,31 @@ const INITIAL_FORM_DATA: VisitFormData = {
   evidenceTrail: {},
 };
 
+interface PipelineField {
+  value: unknown;
+  state: 'confirmed' | 'uncertain' | 'missing';
+  evidence: string;
+}
+
+interface PipelineTurnResponse {
+  session_id: string;
+  transcript: string;
+  extracted: Record<string, unknown>;
+  fields: Record<string, PipelineField>;
+  questions: string[];
+  answer_text: string | null;
+  danger: DangerEngineResult;
+  read_back_text: string | null;
+  saved: boolean;
+  encrypted_record: string | null;
+  followups: FollowupItem[];
+  referral_slip: string | null;
+  saved_record: Record<string, unknown> | null;
+  test_mode: boolean;
+  roster_label: string | null;
+  rule: string;
+}
+
 export default function App() {
   // Navigation
   const [activeTab, setActiveTab] = useState<'visit' | 'records' | 'settings'>('visit');
@@ -102,8 +126,7 @@ export default function App() {
   const [textSize, setTextSize] = useState<'normal' | 'large' | 'xl'>('normal');
   const [showJudgeView, setShowJudgeView] = useState<boolean>(false);
   const [showDemoModal, setShowDemoModal] = useState<boolean>(false);
-  // TEST MODE: Strictly OFF by default
-  const [testModeEnabled, setTestModeEnabled] = useState<boolean>(false);
+  const [serverTestMode, setServerTestMode] = useState(false);
 
   // Visit State
   const [stepState, setStepState] = useState<StepState>('listening');
@@ -134,6 +157,9 @@ export default function App() {
     return [];
   });
   const [newBeneficiaries, setNewBeneficiaries] = useState<BeneficiaryRecord[]>([]);
+  const [pipelineFields, setPipelineFields] = useState<Record<string, PipelineField>>({});
+  const [selectedPipelineField, setSelectedPipelineField] = useState<{ key: string; label: string } | null>(null);
+  const pipelineSessionIdRef = useRef(`visit-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   const [workflowError, setWorkflowError] = useState<{ message: string; canRetry: boolean } | null>(null);
   const stopRecordingRef = useRef<() => void>(() => {});
   const lastProcessedTranscriptRef = useRef('');
@@ -222,6 +248,11 @@ export default function App() {
       const health = await response.json();
       setServiceHealth(health);
       setHealthAvailable(true);
+      const configResponse = await fetch('/api/config');
+      if (configResponse.ok) {
+        const config = await configResponse.json();
+        setServerTestMode(config.testMode === true);
+      }
     } catch {
       setHealthAvailable(false);
     }
@@ -254,7 +285,7 @@ export default function App() {
   const healthMessage = !healthAvailable
     ? 'Backend health check is unavailable. Restart the backend and retry.'
     : missingKeys.length
-      ? missingKeys.map((key) => `${key} is missing. Set ${key} in the .env file in the project root, then restart the backend.`).join(' ')
+      ? missingKeys.map((key) => `${key} is missing. Put ${key} in the .env file in the project root, then restart the server.`).join(' ')
       : !serviceHealth.stt_ok || !serviceHealth.tts_ok
         ? 'Gnani Prisma or Timbre health check failed. Check GNANI_API_KEY and connectivity, then retry.'
         : 'A backend service check failed. Review server configuration and retry.';
@@ -262,13 +293,14 @@ export default function App() {
   // Hooks
   const {
     speak,
+    retry: retryTTS,
     stop: stopAudio,
     isPlaying,
     currentCaption,
     lastLatencyMs,
     error: ttsError,
     clearError: clearTTSError,
-  } = useSpeechPlayer(testModeEnabled);
+  } = useSpeechPlayer();
 
   const addJudgeLog = useCallback((type: string, message: string, data?: any) => {
     setJudgeLogs((prev) => [
@@ -336,459 +368,159 @@ export default function App() {
   // Process completed spoken text
   const processUtterance = useCallback(
     async (spokenText: string) => {
-      const startTime = performance.now();
-      const currentUtterance = spokenText.trim();
-      const fullTranscript = visitTranscriptRef.current
-        ? `${visitTranscriptRef.current} ${currentUtterance}`
-        : currentUtterance;
-      visitTranscriptRef.current = fullTranscript;
-      setTranscript(fullTranscript);
-      addJudgeLog('TRANSCRIPT_FINAL', currentUtterance);
-      setWorkflowError(null);
-
-      // Check for spoken correction during read-back ("no, weight is 2.8 kilo")
-      const lower = fullTranscript.toLowerCase();
-      const isCorrection =
-        /^(no|nahi|illi|galat|correction)\b/i.test(currentUtterance) ||
-        currentUtterance.toLowerCase().includes('change weight');
-
-      const isAffirmative = /^(yes|yeah|yep|correct|okay|ok|save|haan|हां|हाँ|ಹೌದು)\b/i.test(currentUtterance);
-      if (stepState === 'confirm' && isAffirmative && awaitingSaveConfirmationRef.current) {
-        awaitingSaveConfirmationRef.current = false;
+      const pipelineStarted = performance.now();
+      const pipelineUtterance = spokenText.trim();
+      if (!pipelineUtterance) return;
+      if (isPlaying && /^(no|nahi|illi|galat|correction)\b/i.test(pipelineUtterance)) {
         stopAudio();
-        await saveRecordRef.current();
-        return;
       }
-      awaitingSaveConfirmationRef.current = false;
-
-      if (isCorrection && isPlaying) {
-        stopAudio();
-        addJudgeLog('BARGE_IN_CORRECTION', 'Agent stopped immediately for user correction');
-      }
-
-      setStepState('checking');
-
-      // 1. Language Auto-Detection
-      let utteranceLanguage = language;
-      if (/[\u0900-\u097F]/.test(currentUtterance) && language !== 'hi-IN') {
-        utteranceLanguage = 'hi-IN';
-        setLanguage(utteranceLanguage);
-        addJudgeLog('AUTO_LID', 'Auto-switched language to Hindi (hi-IN)');
-      } else if (/[\u0C80-\u0CFF]/.test(currentUtterance) && language !== 'kn-IN') {
-        utteranceLanguage = 'kn-IN';
-        setLanguage(utteranceLanguage);
-        addJudgeLog('AUTO_LID', 'Auto-switched language to Kannada (kn-IN)');
-      }
-      const currentLang = LANGUAGE_CATALOG[utteranceLanguage] || LANGUAGE_CATALOG['en-IN'];
-
-      let geminiExtracted: any;
       try {
-        const extractRes = await fetch('/api/extract', {
+        setWorkflowError(null);
+        const response = await fetch('/api/turn', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            transcript: activeQuestion && !/save/i.test(activeQuestion)
-              ? `Question: ${activeQuestion}\nAnswer: ${fullTranscript}`
-              : fullTranscript,
-            lang: utteranceLanguage,
+            session_id: pipelineSessionIdRef.current,
+            transcript: pipelineUtterance,
+            language,
           }),
         });
-        const extractData = await extractRes.json();
-        if (!extractRes.ok) {
-          throw new Error(extractData.error || `Gemini extraction failed (HTTP ${extractRes.status}).`);
-        }
-        geminiExtracted = extractData;
-        setExtractedJson(geminiExtracted);
-        addJudgeLog('LLM_EXTRACTION', `Gemini structured extraction (${geminiExtracted.modelUsed})`, geminiExtracted);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'Gemini extraction failed.';
-        setWorkflowError({ message, canRetry: true });
-        setStepState('confirm');
-        addJudgeLog('LLM_EXTRACTION_ERROR', 'Gemini extraction failed.');
-        return;
-      }
+        const result = await response.json() as PipelineTurnResponse & { error?: string };
+        if (!response.ok) throw new Error(result.error || 'Visit pipeline failed.');
 
-      const rawBeneficiaryNames: unknown = geminiExtracted.beneficiaryNames;
-      let spokenNames: string[] = Array.isArray(rawBeneficiaryNames)
-        ? Array.from(new Set(rawBeneficiaryNames.filter((name): name is string =>
-            typeof name === 'string' && Boolean(name.trim())
-          )))
-        : [];
-      if (activeQuestion?.startsWith('Which person is this visit for:')) {
-        const answer = currentUtterance.toLocaleLowerCase();
-        const selectedName = spokenNames.find((name: string) =>
-          answer.includes(name.toLocaleLowerCase()) ||
-          answer === name.split(/\s+/)[0].toLocaleLowerCase()
-        );
-        if (selectedName) {
-          geminiExtracted.beneficiaryName = selectedName;
-          spokenNames = [selectedName];
-          setActiveQuestion(null);
-        }
-      }
-      if (spokenNames.length > 1) {
-        const prompt = `Which person is this visit for: ${spokenNames.join(' or ')}?`;
-        setActiveQuestion(prompt);
-        setStepState('confirm');
-        speak(prompt, utteranceLanguage, voice, () => {
-          void startRecordingRef.current(utteranceLanguage);
+        visitTranscriptRef.current = result.transcript;
+        setTranscript(result.transcript);
+        setPipelineFields(result.fields);
+        setExtractedJson(result.extracted);
+        setDangerResult(result.danger);
+        setActiveQuestion(result.questions[0] || null);
+        awaitingSaveConfirmationRef.current = Boolean(result.read_back_text);
+        setTurnLatencyMs(Math.round(performance.now() - pipelineStarted));
+        setStepState(result.saved ? 'saved' : result.questions.length ? 'confirm' : 'checking');
+        addJudgeLog('TURN_PIPELINE', result.rule, {
+          source: result.test_mode ? 'mock text test' : 'Gnani Prisma v3.0',
+          transcript: result.transcript,
+          extracted: result.extracted,
+          fields: result.fields,
+          rule: result.rule,
+          decision: result.danger.decision,
         });
-        addJudgeLog('MULTIPLE_BENEFICIARIES', 'Asked which named person this visit is for.', spokenNames);
-        return;
-      }
 
-      // 2. Beneficiary Roster Check
-      let matchedBeneficiary: BeneficiaryRecord | null = null;
-      let matchedName: string | null = null;
-      let matchedId: string | null = null;
-      let matchedHouse: string | null = null;
-      let matchedVillage: string | null = null;
-      let isDisambiguate = false;
-      let addedNewBeneficiary = false;
-
-      // Check if answering an open disambiguation question
-      if (disambiguationState.isOpen) {
-        const saidHouse = geminiExtracted.houseNo || fullTranscript.match(/\b(?:house|makan|mane)\s*(?:number|no\.?)?\s*(\d+)\b/i)?.[1];
-        for (const cand of disambiguationState.candidates) {
-          if (saidHouse && String(saidHouse) === cand.house_no) {
-            matchedBeneficiary = cand;
-            setDisambiguationState({ isOpen: false, promptText: '', candidates: [] });
-            break;
-          }
-        }
-      }
-
-      if (!matchedBeneficiary) {
-        const extractedName = geminiExtracted.beneficiaryName || spokenNames[0];
-        const matches = extractedName
-          ? [...SYNTHETIC_ROSTER, ...newBeneficiaries].filter(
-              (beneficiary) => beneficiary.name.toLocaleLowerCase() === extractedName.toLocaleLowerCase()
-            )
-          : [];
-
-        const extractedHouse = geminiExtracted.houseNo
-          ? String(geminiExtracted.houseNo)
-          : fullTranscript.match(/\b(?:house|makan|mane)\s*(?:number|no\.?)?\s*(\d+)\b/i)?.[1];
-        const selectedMatch = matches.length > 1 && extractedHouse
-          ? matches.find((beneficiary) => beneficiary.house_no === extractedHouse)
-          : undefined;
-        if (selectedMatch) {
-          matchedBeneficiary = selectedMatch;
-        } else if (matches.length === 1) {
-          matchedBeneficiary = matches[0];
-        } else if (matches.length > 1) {
-          // Name collision -> Prompt for house number
-          isDisambiguate = true;
-          const prompt = utteranceLanguage === 'kn-IN'
-              ? `${matches[0].name} ಹೆಸರಿನ ಇಬ್ಬರು ಫಲಾನುಭವಿಗಳಿದ್ದಾರೆ - ಮನೆ ಸಂಖ್ಯೆ ${matches[0].house_no} ಅಥವಾ ${matches[1].house_no}?`
-              : utteranceLanguage === 'en-IN'
-                ? `There are multiple beneficiaries named ${matches[0].name}. Which house is this visit for: ${matches.map((item) => item.house_no).join(' or ')}?`
-                : `${matches[0].name} नाम की दो लाभार्थी हैं - मकान नंबर ${matches[0].house_no} या मकान नंबर ${matches[1].house_no}?`;
-
-          setDisambiguationState({
-            isOpen: true,
-            promptText: prompt,
-            candidates: matches,
-          });
-
-          speak(prompt, utteranceLanguage, voice, () => {
-            void startRecordingRef.current(utteranceLanguage);
-          });
-          addJudgeLog('ROSTER_DISAMBIGUATION', `Prompted for ${matches[0].name} (House ${matches[0].house_no} vs ${matches[1].house_no})`);
-        } else if (extractedName) {
-          const category = geminiExtracted.beneficiaryType === 'newborn' || geminiExtracted.visitType === 'PNC'
-            ? 'PNC'
-            : 'ANC';
-          matchedBeneficiary = createSyntheticBeneficiary(
-            extractedName,
-            extractedHouse || 'Unknown',
-            category,
-            Number(geminiExtracted.age) || 0,
-            geminiExtracted.village || 'Rampur'
-          );
-          addedNewBeneficiary = true;
-          addJudgeLog('NEW_BENEFICIARY_ADDED', `New synthetic/demo beneficiary ${extractedName} added.`);
-        }
-      }
-
-      if (matchedBeneficiary) {
-        matchedName = matchedBeneficiary.name;
-        matchedId = matchedBeneficiary.id;
-        matchedHouse = matchedBeneficiary.house_no;
-        matchedVillage = matchedBeneficiary.village;
-      }
-      const beneficiaryAnnouncement = addedNewBeneficiary && matchedName
-        ? `New beneficiary ${matchedName} added. `
-        : '';
-
-      // 3. Visit Type and normalized fields
-      let vType: 'ANC' | 'PNC' | 'immunisation' =
-        geminiExtracted.visitType || formData.visitType || 'ANC';
-      if (geminiExtracted.visitType) {
-        vType = geminiExtracted.visitType;
-      } else if (
-        lower.includes('pnc') ||
-        lower.includes('bachha') ||
-        lower.includes('newborn') ||
-        lower.includes('shishu') ||
-        lower.includes('magu') ||
-        (matchedBeneficiary && matchedBeneficiary.category === 'PNC')
-      ) {
-        vType = 'PNC';
-      } else if (lower.includes('tika') || lower.includes('vaccin') || lower.includes('dose')) {
-        vType = 'immunisation';
-      }
-
-      // 4. Number Normalizer (Dual Method)
-      const rawWeightText = geminiExtracted.evidence?.weight ||
-        fullTranscript.match(/(?:weight|vajan|wazan|bhaar|ತೂಕ)\s*(?:is|of|hai|:)?\s*\d+(?:\.\d+)?\s*(?:kg|kilo(?:grams?)?|grams?)?/i)?.[0] ||
-        (geminiExtracted.weight !== null ? `${geminiExtracted.weight} kilo` : '');
-      let parsedWeight: any;
-      let bpUncertain = false;
-      let dResult: DangerEngineResult;
-      try {
-        const evaluationResponse = await fetch('/api/evaluate', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            transcript: fullTranscript,
-            weightText: rawWeightText,
-            lang: utteranceLanguage,
-            beneficiaryName: matchedName || geminiExtracted.beneficiaryName,
-            beneficiaryId: matchedId,
-            category: geminiExtracted.beneficiaryType === 'newborn' ? 'newborn' : 'adult',
-            bpSystolic: geminiExtracted.bpSystolic,
-            bpDiastolic: geminiExtracted.bpDiastolic,
-            hemoglobin: geminiExtracted.hemoglobin,
-          }),
-        });
-        const evaluation = await evaluationResponse.json();
-        if (!evaluationResponse.ok) {
-          throw new Error(evaluation.error || 'Deterministic safety checks failed.');
-        }
-        parsedWeight = evaluation.weight;
-        bpUncertain = evaluation.bloodPressure.state === 'uncertain' ||
-          geminiExtracted.confidence.bp === 'uncertain';
-        dResult = evaluation.danger;
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'Deterministic safety checks failed.';
-        setWorkflowError({ message, canRetry: true });
-        setStepState('confirm');
-        return;
-      }
-
-      const bpSys = geminiExtracted.bpSystolic;
-      const bpDia = geminiExtracted.bpDiastolic;
-      const ifaCount = geminiExtracted.ifaTablets;
-
-      // 7. Vaccinations
-      const vaccs: string[] = [];
-      ['tt1', 'tt2', 'tt booster', 'td', 'bcg', 'opv', 'pentavalent', 'rotavirus', 'mr'].forEach((v) => {
-        if (lower.includes(v)) vaccs.push(v.toUpperCase());
-      });
-
-      setDangerResult(dResult);
-      addJudgeLog('DANGER_DECISION', `${dResult.decision} - ${dResult.ruleFired}`, dResult);
-      setExtractedJson({ ...geminiExtracted, normalizedWeight: parsedWeight.value, dangerDecision: dResult.decision });
-
-      // Build updated Form Data
-      setFormData((prev) => {
-        const updatedStates = { ...prev.fieldStates };
-        const updatedEvidence = { ...prev.evidenceTrail };
-
-        // Beneficiary
-        const effectiveName = matchedName || geminiExtracted?.beneficiaryName;
-        if (effectiveName) {
-          updatedStates.beneficiary = geminiExtracted.confidence.beneficiary === 'uncertain'
-            ? 'uncertain'
-            : 'confirmed';
-          updatedEvidence.beneficiary = {
-            value: `${effectiveName} (${matchedId || 'Pending'})`,
-            sourceText: effectiveName,
-            detector: 'rule_engine',
+        const field = (name: string) => result.fields[name];
+        const value = (name: string) => field(name)?.value;
+        const evidence = (name: string) => {
+          const item = field(name);
+          if (!item) return undefined;
+          return {
+            value: item.value,
+            sourceText: item.evidence,
+            detector: 'LLM' as const,
             timestamp: new Date().toLocaleTimeString(),
           };
-        }
-
-        // Weight
-        let finalWeight = prev.weight;
-        const candidateWeight = parsedWeight.value ?? geminiExtracted?.weight;
-        if (candidateWeight !== null && candidateWeight !== undefined) {
-          finalWeight = candidateWeight;
-          updatedStates.weight = geminiExtracted.confidence.weight === 'uncertain'
-            ? 'uncertain'
-            : parsedWeight.state || 'confirmed';
-          const prevHist = prev.evidenceTrail.weight?.previousValues || [];
-          if (prev.weight !== null && prev.weight !== candidateWeight) {
-            prevHist.push({
-              value: prev.weight,
-              timestamp: new Date().toLocaleTimeString(),
-              reason: 'Spoken correction',
-            });
-          }
-          updatedEvidence.weight = {
-            value: candidateWeight,
-            sourceText: parsedWeight.rawText || geminiExtracted.evidence?.weight || `${candidateWeight} kg`,
-            detector: 'number_normalizer',
-            timestamp: new Date().toLocaleTimeString(),
-            previousValues: prevHist,
-          };
-        }
-
-        // Blood pressure
-        const finalSys = bpSys ?? geminiExtracted?.bpSystolic;
-        const finalDia = bpDia ?? geminiExtracted?.bpDiastolic;
-        if (finalSys && finalDia) {
-          updatedStates.bp = bpUncertain ? 'uncertain' : 'confirmed';
-          updatedEvidence.bp = {
-            value: `${finalSys}/${finalDia}`,
-            sourceText: geminiExtracted.evidence?.bloodPressure || `${finalSys}/${finalDia}`,
-            detector: 'number_normalizer',
-            timestamp: new Date().toLocaleTimeString(),
-          };
-        }
-
-        // IFA
-        const finalIfa = ifaCount ?? geminiExtracted?.ifaTablets;
-        if (finalIfa !== null && finalIfa !== undefined) {
-          updatedStates.ifa = 'confirmed';
-          updatedEvidence.ifa = {
-            value: finalIfa,
-            sourceText: geminiExtracted.evidence?.ifaStatus || `${finalIfa} IFA`,
-            detector: 'number_normalizer',
-            timestamp: new Date().toLocaleTimeString(),
-          };
-        } else if (geminiExtracted.ifaStatus) {
-          updatedStates.ifa = geminiExtracted.confidence.ifa === 'uncertain' ? 'uncertain' : 'confirmed';
-          updatedEvidence.ifa = {
-            value: geminiExtracted.ifaStatus,
-            sourceText: geminiExtracted.evidence?.ifaStatus || geminiExtracted.ifaStatus,
-            detector: 'LLM',
-            timestamp: new Date().toLocaleTimeString(),
-          };
-        }
-
-        // Vaccinations
-        if (vaccs.length > 0 || (geminiExtracted?.vaccinationsGiven && geminiExtracted.vaccinationsGiven.length > 0)) {
-          updatedStates.vaccinations = 'confirmed';
-        }
-
-        return {
-          ...prev,
-          beneficiaryName: effectiveName || prev.beneficiaryName,
-          beneficiaryId: matchedId || prev.beneficiaryId,
-          houseNo: matchedHouse || prev.houseNo,
-          village: matchedVillage || prev.village,
-          visitType: vType,
-          weight: finalWeight,
-          bpSystolic: finalSys || prev.bpSystolic,
-          bpDiastolic: finalDia || prev.bpDiastolic,
-          ifaTablets: finalIfa !== null && finalIfa !== undefined ? finalIfa : prev.ifaTablets,
-          ifaStatus: geminiExtracted.ifaStatus || prev.ifaStatus,
-          gestationalWeeks: geminiExtracted.gestationalWeeks ?? prev.gestationalWeeks,
-          childAgeDays: geminiExtracted.babyAgeDays ?? prev.childAgeDays,
-          lastAncDate: geminiExtracted.lastAncDate || prev.lastAncDate,
-          vaccinationsGiven: vaccs.length > 0 ? vaccs : (geminiExtracted?.vaccinationsGiven || prev.vaccinationsGiven),
-          fieldStates: updatedStates,
-          evidenceTrail: updatedEvidence,
         };
-      });
+        setFormData((previous) => ({
+          ...previous,
+          beneficiaryName: typeof value('name') === 'string' ? value('name') as string : previous.beneficiaryName,
+          beneficiaryId: typeof result.saved_record?.beneficiaryId === 'string'
+            ? String(result.saved_record.beneficiaryId)
+            : previous.beneficiaryId,
+          houseNo: typeof value('houseNo') === 'string' ? value('houseNo') as string : previous.houseNo,
+          visitType: ['ANC', 'PNC', 'immunisation'].includes(String(value('visitType')))
+            ? value('visitType') as VisitFormData['visitType'] : previous.visitType,
+          weight: typeof value('weight') === 'number' ? value('weight') as number : previous.weight,
+          bpSystolic: typeof value('bpSystolic') === 'number' ? value('bpSystolic') as number : previous.bpSystolic,
+          bpDiastolic: typeof value('bpDiastolic') === 'number' ? value('bpDiastolic') as number : previous.bpDiastolic,
+          ifaStatus: typeof value('ifaStatus') === 'string' ? value('ifaStatus') as string : previous.ifaStatus,
+          lastAncDate: typeof value('lastAncDate') === 'string' ? value('lastAncDate') as string : previous.lastAncDate,
+          gestationalWeeks: typeof value('pregnancyMonths') === 'number'
+            ? (value('pregnancyMonths') as number) * 4 : previous.gestationalWeeks,
+          childAgeDays: typeof value('babyAgeDays') === 'number' ? value('babyAgeDays') as number : previous.childAgeDays,
+          vaccinationsGiven: Array.isArray(value('vaccinationsGiven'))
+            ? value('vaccinationsGiven') as string[] : previous.vaccinationsGiven,
+          fieldStates: {
+            beneficiary: field('name')?.state || previous.fieldStates.beneficiary,
+            visitType: field('visitType')?.state || previous.fieldStates.visitType,
+            weight: field('weight')?.state || previous.fieldStates.weight,
+            bp: field('bpSystolic')?.state === 'uncertain' || field('bpDiastolic')?.state === 'uncertain'
+              ? 'uncertain'
+              : value('bpSystolic') !== null && value('bpDiastolic') !== null
+                ? 'confirmed' : 'missing',
+            ifa: field('ifaStatus')?.state || previous.fieldStates.ifa,
+            vaccinations: field('vaccinationsGiven')?.state || 'missing',
+          },
+          evidenceTrail: {
+            beneficiary: evidence('name'),
+            weight: evidence('weight'),
+            bp: evidence('bpSystolic'),
+            ifa: evidence('ifaStatus'),
+          },
+        }));
 
-      const elapsed = Math.round(performance.now() - startTime);
-      setTurnLatencyMs(elapsed);
+        if (result.roster_label) {
+          const rosterResponse = await fetch('/api/beneficiaries');
+          if (rosterResponse.ok) setNewBeneficiaries(await rosterResponse.json());
+        }
+        if (result.saved && result.saved_record) {
+          const record = result.saved_record;
+          const savedVisit: SavedVisitRecord = {
+            id: String(record.id || `REC-${Date.now()}`),
+            timestamp: String(record.timestamp || new Date().toISOString()),
+            beneficiaryName: String(record.beneficiaryName || value('name') || 'Unknown'),
+            beneficiaryId: String(record.beneficiaryId || value('name') || 'Unknown'),
+            village: String(record.village || 'Rampur'),
+            houseNo: String(record.houseNo || value('houseNo') || 'Unknown'),
+            visitType: String(record.visitType || value('visitType') || 'ANC'),
+            weight: typeof record.weight === 'number' ? record.weight : null,
+            bp: typeof record.bp === 'string' ? record.bp : null,
+            isFlagged: record.isFlagged === true,
+            flaggedSigns: result.danger.flaggedSigns,
+            referralSlip: result.referral_slip || undefined,
+            encryptedToken: result.encrypted_record || undefined,
+            transcript: result.transcript,
+            followups: result.followups,
+          };
+          setSavedRecords((previous) => [savedVisit, ...previous.filter((item) => item.id !== savedVisit.id)]);
+          const stored = JSON.parse(localStorage.getItem('asha_saved_records') || '[]');
+          localStorage.setItem('asha_saved_records', JSON.stringify([
+            { id: savedVisit.id, timestamp: savedVisit.timestamp, encryptedToken: result.encrypted_record },
+            ...(Array.isArray(stored) ? stored : []),
+          ]));
+          setSavedFollowups(result.followups);
+        }
 
-      // Voice Response & Read-Back Strategy
-      if (dResult.decision === 'FLAG') {
-        speak(`${beneficiaryAnnouncement}Please refer to the PHC now.`, 'en-IN', voice);
-        setStepState('confirm');
-      } else if (isDisambiguate) {
-        // Disambiguation prompt already spoken above
-        setStepState('confirm');
-      } else if (parsedWeight.isConfusable && parsedWeight.confusablePrompt) {
-        // Confusable sound-alike guard (e.g. saat vs saath)
-        speak(`${beneficiaryAnnouncement}${parsedWeight.confusablePrompt}`, utteranceLanguage, voice, () => {
-          void startRecordingRef.current(utteranceLanguage);
-        });
-        setActiveQuestion(parsedWeight.confusablePrompt);
-        setStepState('confirm');
-      } else if (dResult.decision === 'ASK' && dResult.clarificationQuestions.length > 0) {
-        // Targeted clarification for hedged / unknown symptom
-        const q = dResult.clarificationQuestions[0];
-        speak(`${beneficiaryAnnouncement}${q}`, utteranceLanguage, voice, () => {
-          void startRecordingRef.current(utteranceLanguage);
-        });
-        setActiveQuestion(q);
-        setStepState('confirm');
-      } else if (!matchedName && !geminiExtracted.beneficiaryName && !formData.beneficiaryName) {
-        const prompt = currentLang.spoken.ask_beneficiary_id;
-        speak(`${beneficiaryAnnouncement}${prompt}`, utteranceLanguage, voice, () => {
-          void startRecordingRef.current(utteranceLanguage);
-        });
-        setActiveQuestion(prompt);
-        setStepState('confirm');
-      } else if (
-        (parsedWeight.value === null && geminiExtracted.weight === null && !formData.weight) ||
-        parsedWeight.state === 'uncertain' ||
-        geminiExtracted.confidence.weight === 'uncertain'
-      ) {
-        const prompt = currentLang.spoken.ask_weight;
-        speak(`${beneficiaryAnnouncement}${prompt}`, utteranceLanguage, voice, () => {
-          void startRecordingRef.current(utteranceLanguage);
-        });
-        setActiveQuestion(prompt);
-        setStepState('confirm');
-      } else if (
-        ((!bpSys || !bpDia) && (!formData.bpSystolic || !formData.bpDiastolic)) ||
-        bpUncertain
-      ) {
-        const prompt = currentLang.spoken.ask_bp;
-        speak(`${beneficiaryAnnouncement}${prompt}`, utteranceLanguage, voice, () => {
-          void startRecordingRef.current(utteranceLanguage);
-        });
-        setActiveQuestion(prompt);
-        setStepState('confirm');
-      } else if (!geminiExtracted.ifaStatus && ifaCount === null && !formData.ifaTablets) {
-        const prompt = currentLang.spoken.ask_ifa;
-        speak(`${beneficiaryAnnouncement}${prompt}`, utteranceLanguage, voice, () => {
-          void startRecordingRef.current(utteranceLanguage);
-        });
-        setActiveQuestion(prompt);
-        setStepState('confirm');
-      } else {
-        // Read-back numbers, then short "baaki sab theek, save karun?"
-        let readback = '';
-        const readbackWeight = parsedWeight.value ?? geminiExtracted.weight ?? formData.weight;
-        const readbackSys = bpSys ?? formData.bpSystolic;
-        const readbackDia = bpDia ?? formData.bpDiastolic;
-        if (readbackWeight) {
-          readback += `Weight ${readbackWeight} kilo. `;
+        if (result.answer_text) {
+          const responseText = result.read_back_text || result.answer_text;
+          const spokenText = result.saved && result.followups.length
+            ? `${responseText} ${result.followups.map((item) => `${item.item}, due ${item.dueDate}`).join('. ')}`
+            : responseText;
+          if (result.read_back_text) void startRecordingRef.current(language);
+          speak(spokenText, language, voice, () => {
+            if (!result.read_back_text && !result.saved && result.questions.length) {
+              void startRecordingRef.current(language);
+            }
+          });
+        } else if (result.questions.length) {
+          speak(result.questions[0], language, voice, () => {
+            void startRecordingRef.current(language);
+          });
         }
-        if (readbackSys && readbackDia) {
-          readback += `BP ${readbackSys} by ${readbackDia}. `;
-        }
-        readback += currentLang.spoken.save_confirm;
-        setActiveQuestion(currentLang.spoken.save_confirm);
-        awaitingSaveConfirmationRef.current = true;
-        void startRecordingRef.current(utteranceLanguage);
-        speak(`${beneficiaryAnnouncement}${readback}`, utteranceLanguage, voice, () => {
-          void startRecordingRef.current(utteranceLanguage);
-        });
+        return;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Visit pipeline failed.';
+        setWorkflowError({ message, canRetry: true });
         setStepState('confirm');
+        addJudgeLog('TURN_PIPELINE_ERROR', 'Backend turn pipeline failed.');
+        return;
       }
+
     },
     [
       language,
       voice,
-      disambiguationState,
-      newBeneficiaries,
-      formData,
-      stepState,
-      activeQuestion,
       speak,
       isPlaying,
       stopAudio,
       addJudgeLog,
-      createSyntheticBeneficiary,
     ]
   );
 
@@ -823,7 +555,7 @@ export default function App() {
     clearError: clearSTTError,
     startRecording,
     stopRecording,
-  } = useAudioRecorder(handleTranscriptChunk, testModeEnabled);
+  } = useAudioRecorder(handleTranscriptChunk);
   startRecordingRef.current = startRecording;
   stopRecordingRef.current = stopRecording;
 
@@ -861,6 +593,8 @@ export default function App() {
   const handleRunDemoScenario = (scenario: DemoScenario) => {
     stopAudio();
     stopRecording();
+    pipelineSessionIdRef.current = `visit-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    setPipelineFields({});
     awaitingSaveConfirmationRef.current = false;
     lastProcessedTranscriptRef.current = '';
     visitTranscriptRef.current = '';
@@ -872,93 +606,16 @@ export default function App() {
 
   // Save Record
   const handleSaveRecord = async () => {
-    stopAudio();
-    awaitingSaveConfirmationRef.current = false;
-    const currentLang = LANGUAGE_CATALOG[language] || LANGUAGE_CATALOG['en-IN'];
-    const followups = generateFollowups(
-      formData.visitType || 'ANC',
-      formData.gestationalWeeks,
-      formData.childAgeDays,
-      formData.ifaTablets
-    );
-
-    if (!formData.beneficiaryName || !formData.beneficiaryId) {
-      setWorkflowError({
-        message: 'A beneficiary must be identified before this visit can be saved.',
-        canRetry: true,
-      });
-      return;
-    }
-
-    const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 16);
-    const recordId = `REC-${Date.now()}`;
-    const recordPayload = {
-      id: recordId,
-      timestamp,
-      beneficiaryName: formData.beneficiaryName,
-      beneficiaryId: formData.beneficiaryId,
-      village: formData.village || 'Rampur',
-      houseNo: formData.houseNo || 'Unknown',
-      visitType: formData.visitType || 'ANC',
-      weight: formData.weight,
-      clinicalDetails: extractedJson,
-      bp: formData.bpSystolic && formData.bpDiastolic ? `${formData.bpSystolic}/${formData.bpDiastolic}` : null,
-      isFlagged: dangerResult?.decision === 'FLAG',
-      flaggedSigns: dangerResult?.flaggedSigns || [],
-      referralSlip: dangerResult?.referralSlip || undefined,
-      transcript: transcript || 'Recorded via ASHA Vaani',
-      followups,
-    };
-
-    // Encrypt record with ENCRYPTION_KEY via backend
-    try {
-      const encRes = await fetch('/api/records/encrypt', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(recordPayload),
-      });
-      const encData = await encRes.json();
-      if (!encRes.ok || typeof encData.encryptedToken !== 'string') {
-        throw new Error(encData.error || 'Encrypted record storage failed.');
-      }
-
-      const newRecord: SavedVisitRecord = {
-        ...recordPayload,
-        id: recordId,
-        timestamp,
-        isFlagged: recordPayload.isFlagged,
-        flaggedSigns: recordPayload.flaggedSigns,
-        referralSlip: recordPayload.referralSlip,
-        encryptedToken: encData.encryptedToken,
-        transcript: recordPayload.transcript,
-        followups,
-      };
-
-      const updated = [newRecord, ...savedRecords];
-      const stored = JSON.parse(localStorage.getItem('asha_saved_records') || '[]');
-      localStorage.setItem('asha_saved_records', JSON.stringify([
-        { id: recordId, timestamp, encryptedToken: encData.encryptedToken },
-        ...(Array.isArray(stored) ? stored : []),
-      ]));
-      setSavedRecords(updated);
-
-      setSavedFollowups(followups);
-      setStepState('saved');
-      setWorkflowError(null);
-
-      const spokenFollowups = followups.map((item) => `${item.item}, due ${item.dueDate}`).join('. ');
-      speak(`${currentLang.spoken.record_saved} ${spokenFollowups}`, language, voice);
-      addJudgeLog('RECORD_SAVED_ENCRYPTED', `Saved encrypted record for ${newRecord.beneficiaryName}.`);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Encrypted record storage failed.';
-      setWorkflowError({ message, canRetry: true });
-    }
+    await processUtterance('yes');
+    return;
   };
   saveRecordRef.current = handleSaveRecord;
 
   // Next Beneficiary
   const handleNextBeneficiary = () => {
     stopAudio();
+    pipelineSessionIdRef.current = `visit-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    setPipelineFields({});
     awaitingSaveConfirmationRef.current = false;
     lastProcessedTranscriptRef.current = '';
     setFormData(INITIAL_FORM_DATA);
@@ -975,6 +632,8 @@ export default function App() {
   // Re-record
   const handleReRecord = () => {
     stopAudio();
+    pipelineSessionIdRef.current = `visit-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    setPipelineFields({});
     awaitingSaveConfirmationRef.current = false;
     lastProcessedTranscriptRef.current = '';
     setTranscript('');
@@ -989,6 +648,8 @@ export default function App() {
   const handlePurgeAllData = () => {
     stopAudio();
     stopRecording();
+    pipelineSessionIdRef.current = `visit-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    setPipelineFields({});
     awaitingSaveConfirmationRef.current = false;
     lastProcessedTranscriptRef.current = '';
     visitTranscriptRef.current = '';
@@ -1024,19 +685,13 @@ export default function App() {
         textSize === 'large' ? 'text-base' : textSize === 'xl' ? 'text-lg' : 'text-sm'
       }`}
     >
-      {/* Test Mode Warning Banner (Visible ONLY when Test Mode is turned ON) */}
-      {testModeEnabled && (
+      {/* Test Mode Warning Banner */}
+      {serverTestMode && (
         <div className="bg-amber-500 text-amber-950 font-bold px-4 py-1.5 text-xs flex items-center justify-between shadow-sm sticky top-0 z-40">
           <div className="flex items-center gap-1.5">
             <AlertTriangle className="w-4 h-4 shrink-0 text-amber-950" />
-            <span>⚠️ TEST MODE: Browser Voice Emulator Active (Gnani bypassed for testing)</span>
+            <span>TEST MODE: Mock text extraction active; live Gnani voice path is unchanged.</span>
           </div>
-          <button
-            onClick={() => setTestModeEnabled(false)}
-            className="text-[10px] bg-amber-900 hover:bg-black text-white px-2 py-0.5 rounded font-bold"
-          >
-            Turn OFF
-          </button>
         </div>
       )}
 
@@ -1079,27 +734,19 @@ export default function App() {
               <div className="mt-2 flex items-center gap-2">
                 <button
                   onClick={() => {
-                    clearSTTError();
-                    clearTTSError();
-                    handleToggleMic();
+                    if (ttsError) {
+                      clearTTSError();
+                      retryTTS();
+                    } else {
+                      clearSTTError();
+                      handleToggleMic();
+                    }
                   }}
                   className="px-3 py-1 bg-red-600 text-white rounded-lg font-bold text-xs flex items-center gap-1 hover:bg-red-700 active:scale-95 transition"
                 >
                   <RefreshCw className="w-3 h-3" />
-                  Retry Voice Call
+                  {ttsError ? 'Retry TTS' : 'Retry Voice Call'}
                 </button>
-                {!testModeEnabled && (
-                  <button
-                    onClick={() => {
-                      clearSTTError();
-                      clearTTSError();
-                      setTestModeEnabled(true);
-                    }}
-                    className="px-2.5 py-1 bg-white border border-red-300 text-red-700 rounded-lg font-semibold text-xs hover:bg-red-50"
-                  >
-                    Enable Test Mode
-                  </button>
-                )}
                 <button
                   onClick={() => {
                     clearSTTError();
@@ -1171,7 +818,9 @@ export default function App() {
                 label="Beneficiary"
                 value={
                   formData.beneficiaryName
-                    ? `${formData.beneficiaryName} (${formData.beneficiaryId || 'House ' + (formData.houseNo || '12')})`
+                    ? `${formData.beneficiaryName}${formData.beneficiaryId
+                      ? ` (${formData.beneficiaryId})`
+                      : formData.houseNo ? ` (House ${formData.houseNo})` : ''}`
                     : null
                 }
                 state={formData.fieldStates.beneficiary}
@@ -1273,6 +922,51 @@ export default function App() {
                   })
                 }
               />
+
+              {[
+                ['age', 'Age'],
+                ['beneficiaryType', 'Beneficiary Type'],
+                ['pregnancyMonths', 'Months Pregnant'],
+                ['babyAgeDays', 'Baby Age (days)'],
+                ['houseNo', 'House Number'],
+                ['hemoglobin', 'Haemoglobin'],
+                ['lastAncDate', 'Last ANC Date'],
+                ['ttStatus', 'TT / Td Doses'],
+                ['ttLastDoseDate', 'Last TT / Td Dose Date'],
+                ['symptoms', 'Symptoms'],
+                ['notes', 'Other Notes'],
+              ].map(([key, label]) => {
+                const item = pipelineFields[key];
+                const itemValue = item?.value;
+                const displayValue = Array.isArray(itemValue)
+                  ? itemValue.map((symptom) =>
+                      typeof symptom === 'object' && symptom !== null
+                        ? `${(symptom as { negated?: boolean }).negated ? 'No ' : ''}${(symptom as { canonicalId?: string }).canonicalId || 'symptom'}`
+                        : String(symptom)
+                    ).join(', ')
+                  : typeof itemValue === 'object' && itemValue !== null
+                    ? JSON.stringify(itemValue)
+                    : typeof itemValue === 'string' || typeof itemValue === 'number'
+                      ? itemValue
+                      : null;
+                const evidence = item ? {
+                  value: item.value,
+                  sourceText: item.evidence,
+                  detector: 'LLM' as const,
+                  timestamp: new Date().toLocaleTimeString(),
+                } : undefined;
+                return (
+                  <FieldCard
+                    key={key}
+                    label={label}
+                    value={displayValue}
+                    state={item?.state || 'missing'}
+                    evidence={evidence}
+                    icon={<Activity className="w-5 h-5" />}
+                    onTap={() => setSelectedPipelineField({ key, label })}
+                  />
+                );
+              })}
             </div>
 
             {/* Post-Save Summary and Spoken Follow-up Checklist */}
@@ -1334,8 +1028,6 @@ export default function App() {
             showJudgeView={showJudgeView}
             onToggleJudgeView={() => setShowJudgeView((p) => !p)}
             onPurgeData={handlePurgeAllData}
-            testModeEnabled={testModeEnabled}
-            onToggleTestMode={() => setTestModeEnabled((p) => !p)}
           />
         )}
       </main>
@@ -1408,6 +1100,65 @@ export default function App() {
               },
             }));
             addJudgeLog('MANUAL_CORRECTION', `Field ${selectedFieldModal.fieldName} updated manually to ${newVal}`);
+          }}
+        />
+      )}
+      {selectedPipelineField && (
+        <EvidenceModal
+          isOpen={true}
+          onClose={() => setSelectedPipelineField(null)}
+          fieldName={selectedPipelineField.label}
+          currentValue={(() => {
+            const value = pipelineFields[selectedPipelineField.key]?.value;
+            return typeof value === 'string' || typeof value === 'number' ? value : '';
+          })()}
+          state={pipelineFields[selectedPipelineField.key]?.state || 'missing'}
+          evidence={pipelineFields[selectedPipelineField.key] ? {
+            value: pipelineFields[selectedPipelineField.key].value,
+            sourceText: pipelineFields[selectedPipelineField.key].evidence,
+            detector: 'LLM',
+            timestamp: new Date().toLocaleTimeString(),
+          } : undefined}
+          onUpdateValue={(newValue) => {
+            const fieldKey = selectedPipelineField.key;
+            setPipelineFields((previous) => ({
+              ...previous,
+              [fieldKey]: {
+                value: newValue,
+                state: 'confirmed',
+                evidence: previous[fieldKey]?.evidence || 'Manual keypad correction',
+              },
+            }));
+            void fetch('/api/turn', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                session_id: pipelineSessionIdRef.current,
+                transcript: '',
+                language,
+                corrections: { [fieldKey]: newValue },
+              }),
+            }).then(async (response) => {
+              const result = await response.json() as PipelineTurnResponse & { error?: string };
+              if (!response.ok) throw new Error(result.error || 'Could not apply field correction.');
+              setPipelineFields(result.fields);
+              setDangerResult(result.danger);
+              setActiveQuestion(result.questions[0] || null);
+              awaitingSaveConfirmationRef.current = Boolean(result.read_back_text);
+              if (result.read_back_text) {
+                void startRecordingRef.current(language);
+                speak(result.read_back_text, language, voice);
+              } else if (result.answer_text) {
+                speak(result.answer_text, language, voice, () => {
+                  if (result.questions.length) void startRecordingRef.current(language);
+                });
+              }
+            }).catch((error) => {
+              setWorkflowError({
+                message: error instanceof Error ? error.message : 'Could not apply field correction.',
+                canRetry: true,
+              });
+            });
           }}
         />
       )}

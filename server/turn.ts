@@ -211,9 +211,12 @@ export async function processTurn(input: {
   session_id: string;
   transcript: string;
   language: string;
+  corrections?: Record<string, unknown>;
 }): Promise<TurnResponse> {
   const text = input.transcript.trim();
-  if (!input.session_id || !text) throw new Error('session_id and transcript are required.');
+  if (!input.session_id || (!text && !input.corrections)) {
+    throw new Error('session_id and transcript or field corrections are required.');
+  }
   const language = ['en-IN', 'hi-IN', 'kn-IN'].includes(input.language) ? input.language : 'en-IN';
   const session: TurnSession = sessions.get(input.session_id) || {
     id: input.session_id,
@@ -234,6 +237,12 @@ export async function processTurn(input: {
   if (session.savedRecord) {
     sessions.set(session.id, session);
     return response(session, emptyExtraction(), evaluateDangerSigns(session.transcript, language), [], null, [], session.savedRecord);
+  }
+
+  const allowedCorrections = new Set(Object.keys(EMPTY_FIELDS));
+  for (const [key, value] of Object.entries(input.corrections || {})) {
+    if (!allowedCorrections.has(key) || value === null || value === undefined || value === '') continue;
+    setField(session.fields, key, value, 'Manual keypad correction');
   }
 
   if (session.pendingSave && /^(yes|yeah|yep|correct|okay|ok|save|haan|हां|हाँ|ಹೌದು)\b/i.test(currentLower)) {
@@ -278,7 +287,9 @@ export async function processTurn(input: {
   } else if (pendingField === 'weight') {
     extractionText += ` weight ${text}`;
   }
-  const extracted = await extractWithGemini(extractionText, language);
+  const extracted = text
+    ? await extractWithGemini(extractionText, language)
+    : emptyExtraction();
   mergeExtraction(session.fields, extracted, text);
 
   if (pendingField === 'houseNo' && session.duplicateCandidates.length) {
@@ -300,7 +311,9 @@ export async function processTurn(input: {
       setField(session.fields, 'ttStatus', `${doses} doses`, text);
     }
   }
-  if (pendingField === 'weight' && /^(no[, ]*)?\d+(?:\.\d+)?\s*(?:kg|kilo)?$/i.test(text)) {
+  const isWeightCorrection = /^(?:no[, ]*)?(?:weight\s*(?:is|:)?\s*)?\d+(?:\.\d+)?\s*(?:kg|kilo)?$/i.test(text);
+  if ((pendingField === 'weight' && isWeightCorrection) ||
+      /^(?:no[, ]*)?weight\s*(?:is|:)?\s*\d+(?:\.\d+)?\s*(?:kg|kilo)?$/i.test(text)) {
     const correction = Number(text.match(/\d+(?:\.\d+)?/)?.[0]);
     setField(session.fields, 'weight', correction, text);
   }
@@ -329,7 +342,8 @@ export async function processTurn(input: {
   if (currentName && !session.pendingQuestion) {
     const matches = roster.filter((item) => item.name.toLowerCase() === currentName.toLowerCase());
     const house = String(session.fields.houseNo.value || '');
-    if (matches.length > 1 && !house) {
+    const sameNameRepeated = (text.toLowerCase().split(currentName.toLowerCase()).length - 1) > 1;
+    if (matches.length > 1 && (!house || sameNameRepeated)) {
       session.duplicateCandidates = matches;
       session.pendingQuestion = question(language, 'chooseHouse');
       session.pendingField = 'houseNo';
@@ -424,7 +438,11 @@ export async function processTurn(input: {
   } else {
     if (parsedWeight.isConfusable) {
       session.pendingField = 'weight';
-      session.pendingQuestion = parsedWeight.confusablePrompt || question(language, 'weight');
+      session.pendingQuestion = language === 'en-IN'
+        ? 'Did you say seven (7) or sixty (60)? Please confirm.'
+        : language === 'kn-IN'
+          ? 'ನೀವು ಏಳು (7) ಎಂದಿರಾ ಅಥವಾ ಅರವತ್ತು (60) ಎಂದಿರಾ? ದಯವಿಟ್ಟು ಖಚಿತಪಡಿಸಿ.'
+          : parsedWeight.confusablePrompt || question(language, 'weight');
     } else if (findMissingField(session)) {
       const missing = findMissingField(session)!;
       session.pendingField = missing;

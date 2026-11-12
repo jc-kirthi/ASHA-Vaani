@@ -8,8 +8,7 @@ export interface STTErrorState {
 }
 
 export function useAudioRecorder(
-  onTranscriptChunk?: (text: string, isFinal: boolean, metadata?: any) => void,
-  testModeEnabled: boolean = false
+  onTranscriptChunk?: (text: string, isFinal: boolean, metadata?: any) => void
 ) {
   const [isRecording, setIsRecording] = useState(false);
   const [audioLevel, setAudioLevel] = useState(0);
@@ -21,7 +20,6 @@ export function useAudioRecorder(
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const animationFrameRef = useRef<number | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
-  const speechRecognitionRef = useRef<any>(null);
   const manualStopRef = useRef(false);
 
   const stopRecording = useCallback(() => {
@@ -43,13 +41,7 @@ export function useAudioRecorder(
       wsRef.current = null;
     }
 
-    // 3. Stop browser emulator if active
-    if (speechRecognitionRef.current) {
-      try { speechRecognitionRef.current.stop(); } catch {}
-      speechRecognitionRef.current = null;
-    }
-
-    // 4. Clean up audio processing nodes
+    // 3. Clean up audio processing nodes
     if (processorRef.current) {
       try {
         processorRef.current.disconnect();
@@ -57,13 +49,13 @@ export function useAudioRecorder(
       processorRef.current = null;
     }
 
-    // 5. Release microphone track
+    // 4. Release microphone track
     if (mediaStreamRef.current) {
       mediaStreamRef.current.getTracks().forEach((track) => track.stop());
       mediaStreamRef.current = null;
     }
 
-    // 6. Close AudioContext
+    // 5. Close AudioContext
     if (audioContextRef.current) {
       try {
         audioContextRef.current.close();
@@ -81,59 +73,7 @@ export function useAudioRecorder(
       manualStopRef.current = false;
       setError(null);
 
-      // Branch A: TEST MODE (Browser Web Speech API Emulator - strictly OFF by default)
-      if (testModeEnabled) {
-        const SpeechRec = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-        if (!SpeechRec) {
-          setError({
-            message: 'Browser Web Speech API is not supported in this browser.',
-            canRetry: false,
-          });
-          return;
-        }
-
-        try {
-          const rec = new SpeechRec();
-          rec.continuous = true;
-          rec.interimResults = true;
-          rec.lang = langCode;
-
-          rec.onresult = (event: any) => {
-            let interimTranscript = '';
-            let finalTranscript = '';
-
-            for (let i = event.resultIndex; i < event.results.length; ++i) {
-              if (event.results[i].isFinal) {
-                finalTranscript += event.results[i][0].transcript;
-              } else {
-                interimTranscript += event.results[i][0].transcript;
-              }
-            }
-
-            if (finalTranscript && onTranscriptChunk) {
-              onTranscriptChunk(finalTranscript, true, { engine: 'browser_emulator' });
-            } else if (interimTranscript && onTranscriptChunk) {
-              onTranscriptChunk(interimTranscript, false, { engine: 'browser_emulator' });
-            }
-          };
-
-          rec.onerror = (e: any) => {
-            if (e.error !== 'no-speech' && e.error !== 'aborted') {
-              setError({ message: `Speech recognition error: ${e.error}`, canRetry: true });
-            }
-          };
-
-          rec.start();
-          speechRecognitionRef.current = rec;
-          setIsRecording(true);
-          return;
-        } catch (err: any) {
-          setError({ message: `Could not start test mode: ${err.message}`, canRetry: true });
-          return;
-        }
-      }
-
-      // Branch B: PRODUCTION LIVE GNANI PRISMA v3.0 STREAMING STT PATH
+      // Gnani Prisma v3.0 streaming STT path
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
           audio: {
@@ -297,7 +237,7 @@ export function useAudioRecorder(
         setIsRecording(false);
       }
     },
-    [onTranscriptChunk, stopRecording, testModeEnabled, isRecording, error]
+    [onTranscriptChunk, stopRecording, isRecording, error]
   );
 
   useEffect(() => {
