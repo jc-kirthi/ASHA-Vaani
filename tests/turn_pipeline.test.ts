@@ -7,10 +7,19 @@ import path from 'node:path';
 process.env.LLM_PROVIDER = 'mock';
 process.env.ENCRYPTION_KEY = crypto.randomBytes(32).toString('hex');
 const rosterFile = path.join(os.tmpdir(), `asha-turn-roster-${process.pid}.json`);
+const recordsFile = path.join(os.tmpdir(), `asha-turn-records-${process.pid}.json`);
 process.env.ASHA_BENEFICIARIES_FILE = rosterFile;
+process.env.ASHA_RECORDS_FILE = recordsFile;
 await fs.rm(rosterFile, { force: true });
+await fs.rm(recordsFile, { force: true });
+await fs.writeFile(rosterFile, JSON.stringify([
+  { id: 'TEST-001', name: 'Sita Devi', house_no: '12', village: 'Rampur', category: 'ANC', age: 24 },
+  { id: 'TEST-002', name: 'Sita Devi', house_no: '40', village: 'Rampur', category: 'PNC', age: 22 },
+]), 'utf8');
 
 const { processTurn, resetTurnSessions, decryptSavedTurn } = await import('../server/turn.ts');
+const { listVisitRecords, saveVisitRecord, updateVisitFollowup } = await import('../server/records.ts');
+const { evaluateDangerSigns } = await import('../src/engine/dangerEngine.ts');
 const results: string[] = [];
 
 async function turn(id: string, transcript: string, language = 'en-IN') {
@@ -31,7 +40,7 @@ async function main() {
     assert.equal(result.fields.pregnancyMonths.value, 7);
     assert.equal(result.fields.weight.value, 58);
     assert.match(result.questions[0], /last ANC/i);
-    assert.equal(result.roster_label, 'synthetic/demo');
+    assert.equal(result.roster_label, 'created');
   });
 
   await casePass('02 split intake retains earlier details', async () => {
@@ -57,8 +66,9 @@ async function main() {
     const result = await turn('case-04', 'Sunita Sharma has heavy bleeding and high fever');
     assert.equal(result.danger.decision, 'FLAG');
     assert.ok(result.referral_slip);
-    assert.equal(result.saved, true);
-    assert.ok(result.encrypted_record);
+    assert.equal(result.saved, false);
+    assert.ok(result.read_back_text);
+    assert.equal((await turn('case-04', 'yes')).saved, true);
   });
 
   await casePass('05 explicit no bleeding clears', async () => {
@@ -95,7 +105,7 @@ async function main() {
     resetTurnSessions();
     const first = await turn('case-10', 'Zoya, ANC, seven months pregnant, house 89');
     const second = await turn('case-10', 'Zoya is at house 89 for follow-up');
-    assert.equal(first.roster_label, 'synthetic/demo');
+    assert.equal(first.roster_label, 'created');
     assert.equal(second.roster_label, null);
     assert.equal(second.fields.name.value, 'Zoya');
   });
@@ -147,9 +157,80 @@ async function main() {
     assert.equal(result.danger.decision, 'CLEAR');
   });
 
-  console.log(`Turn pipeline: ${results.length} passed, 0 failed.`);
-  for (const result of results) console.log(`PASS ${result}`);
+  await casePass('17 uncertain danger answer persists through read-back and save', async () => {
+    resetTurnSessions();
+    const first = await turn(
+      'case-17',
+      'Nila, 25 years old, ANC, seven months pregnant, house 94, weight 55 kilo, BP 120 by 80, IFA taken regularly, last ANC date 2026-10-20, TT two doses last dose 2026-08-01, spotting maybe'
+    );
+    assert.equal(first.danger.decision, 'ASK');
+    const clarified = await turn('case-17', 'no');
+    assert.equal(clarified.danger.decision, 'CLEAR');
+    assert.ok(clarified.read_back_text);
+    const saved = await turn('case-17', 'yes');
+    assert.equal(saved.saved_record?.isFlagged, false);
+    assert.equal(saved.danger.decision, 'CLEAR');
+  });
+
+  await casePass('18 negation is scoped to the symptom, not nearby symptoms', async () => {
+    const mixed = evaluateDangerSigns('no bleeding and fever', 'en-IN');
+    assert.equal(mixed.decision, 'FLAG');
+    assert.ok(mixed.flaggedSigns.some((sign) => sign.id === 'high_fever_pregnancy'));
+    assert.ok(!mixed.flaggedSigns.some((sign) => sign.id === 'vaginal_bleeding'));
+    assert.equal(evaluateDangerSigns('no bleeding and no fever', 'en-IN').decision, 'CLEAR');
+  });
+
+  await casePass('19 manual corrections persist with encrypted record and visit-date follow-ups', async () => {
+    resetTurnSessions();
+    const first = await turn(
+      'case-19',
+      'Nila, 25 years old, ANC, seven months pregnant, house 94, weight 55 kilo, BP 120 by 80, haemoglobin 10.5, IFA taken regularly, IFA 140 tablets, last ANC date 2026-10-20, TT two doses last dose 2026-08-01'
+    );
+    const corrected = await processTurn({
+      session_id: 'case-19',
+      transcript: '',
+      language: 'en-IN',
+      corrections: { weight: 52.5, bpSystolic: 110, bpDiastolic: 70, visitDate: '2026-01-01', gestationalWeeks: 30 },
+    });
+    assert.equal(corrected.fields.weight.value, 52.5);
+    assert.equal(corrected.fields.weight.detector, 'manual_edit');
+    assert.ok(corrected.fields.weight.previousValues?.some((item) => item.value === 55));
+    const saved = await turn('case-19', 'yes');
+    assert.equal(saved.saved_record?.weight, 52.5);
+    assert.equal(saved.saved_record?.bp, '110/70');
+    const followups = saved.followups;
+    assert.equal(followups[0].dueDate, '2026-01-15');
+    const recordId = String(saved.saved_record?.id);
+    const completed = await updateVisitFollowup(recordId, followups[0].id, true);
+    assert.equal(completed.followups?.[0].completed, true);
+    const stored = await listVisitRecords();
+    assert.ok(stored.some((record) => record.id === recordId));
+    const rawStorage = await fs.readFile(recordsFile, 'utf8');
+    assert.ok(!rawStorage.includes('Nila'));
+    assert.equal(decryptSavedTurn(saved.encrypted_record!).weight, 52.5);
+    assert.equal(first.fields.weight.value, 55);
+  });
+
+  await casePass('20 unreadable stored visits block a false successful save', async () => {
+    const original = await fs.readFile(recordsFile, 'utf8');
+    const unreadable = JSON.stringify([{ id: 'unreadable', encryptedToken: 'invalid:token:format' }]);
+    await fs.writeFile(recordsFile, unreadable, 'utf8');
+    try {
+      await assert.rejects(
+        saveVisitRecord({ id: 'new-record' }),
+        /Decryption failed/
+      );
+      assert.equal(await fs.readFile(recordsFile, 'utf8'), unreadable);
+    } finally {
+      await fs.writeFile(recordsFile, original, 'utf8');
+    }
+  });
+
+  console.log(`1..${results.length}`);
+  results.forEach((result, index) => console.log(`ok ${index + 1} - ${result}`));
+  console.log(`Tests: ${results.length} passed, ${results.length} total`);
   await fs.rm(rosterFile, { force: true });
+  await fs.rm(recordsFile, { force: true });
 }
 
 main().catch((error) => {

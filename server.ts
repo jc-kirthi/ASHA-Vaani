@@ -8,9 +8,10 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { synthesizeTimbreV3, warmTTSCache } from './server/gnani.ts';
 import { encryptPayload, decryptPayload } from './server/crypto.ts';
 import type { BeneficiaryRecord } from './src/types/index.ts';
-import { processTurn } from './server/turn.ts';
+import { discardTurnSession, processTurn } from './server/turn.ts';
 import { warmGroqModelCatalog } from './server/groq.ts';
 import { createHealthResponse } from './server/health.ts';
+import { deleteVisitRecords, listVisitRecords, updateVisitFollowup } from './server/records.ts';
 
 const app = express();
 const server = http.createServer(app);
@@ -25,7 +26,7 @@ app.get('/api/beneficiaries', async (_req, res) => {
   try {
     res.json(await readNewBeneficiaries());
   } catch {
-    res.status(500).json({ error: 'Could not load synthetic beneficiaries.' });
+    res.status(500).json({ error: 'Could not load beneficiaries.' });
   }
 });
 
@@ -34,24 +35,26 @@ app.post('/api/beneficiaries', async (req, res) => {
   if (
     typeof name !== 'string' || !name.trim() ||
     typeof house_no !== 'string' || !house_no.trim() ||
+    typeof village !== 'string' || !village.trim() ||
     !['ANC', 'PNC'].includes(category)
   ) {
-    return res.status(400).json({ error: 'Name, house number, and valid beneficiary type are required.' });
+    return res.status(400).json({ error: 'Name, house number, village, and valid beneficiary type are required.' });
   }
   try {
     const records = await readNewBeneficiaries();
     const existing = records.find((item) =>
       item.name.toLocaleLowerCase() === name.trim().toLocaleLowerCase() &&
-      item.house_no === house_no.trim()
+      item.house_no === house_no.trim() &&
+      item.village.toLocaleLowerCase() === village.trim().toLocaleLowerCase()
     );
     if (existing) return res.json(existing);
     const created: BeneficiaryRecord = {
       id: `NEW-${Date.now()}`,
       name: name.trim(),
       house_no: house_no.trim(),
-      village: typeof village === 'string' && village.trim() ? village.trim() : 'Rampur',
+      village: village.trim(),
       category,
-      age: Number.isFinite(Number(age)) ? Number(age) : 0,
+      age: age !== null && age !== undefined && Number.isFinite(Number(age)) ? Number(age) : null,
       isNew: true,
     };
     const updated = [...records, created];
@@ -59,7 +62,40 @@ app.post('/api/beneficiaries', async (req, res) => {
     await fs.writeFile(BENEFICIARIES_FILE, JSON.stringify(updated, null, 2), 'utf8');
     res.status(201).json(created);
   } catch {
-    res.status(500).json({ error: 'Could not save synthetic beneficiary.' });
+    res.status(500).json({ error: 'Could not save beneficiary.' });
+  }
+});
+
+app.get('/api/records', async (_req, res) => {
+  try {
+    res.json(await listVisitRecords());
+  } catch (error) {
+    console.error('[api/records] Could not load saved visit records:', error instanceof Error ? error.message : 'unknown error');
+    res.status(500).json({ error: 'Could not load saved visit records.' });
+  }
+});
+
+app.patch('/api/records/:recordId/followups/:followupId', async (req, res) => {
+  const completed = req.body?.completed;
+  if (typeof completed !== 'boolean') {
+    return res.status(400).json({ error: 'completed must be true or false.' });
+  }
+  try {
+    const record = await updateVisitFollowup(req.params.recordId, req.params.followupId, completed);
+    res.json(record);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Could not update follow-up.';
+    const status = message.includes('not found') ? 404 : 500;
+    res.status(status).json({ error: message });
+  }
+});
+
+app.delete('/api/records', async (_req, res) => {
+  try {
+    await deleteVisitRecords();
+    res.json({ deleted: true });
+  } catch {
+    res.status(500).json({ error: 'Could not delete saved visit records.' });
   }
 });
 
@@ -68,7 +104,7 @@ app.delete('/api/beneficiaries', async (_req, res) => {
     await fs.rm(BENEFICIARIES_FILE, { force: true });
     res.json({ deleted: true });
   } catch {
-    res.status(500).json({ error: 'Could not purge synthetic beneficiaries.' });
+    res.status(500).json({ error: 'Could not delete beneficiaries.' });
   }
 });
 
@@ -132,6 +168,11 @@ app.post('/api/turn', async (req, res) => {
     const message = error instanceof Error ? error.message : 'Visit turn processing failed.';
     res.status(502).json({ error: message, canRetry: true });
   }
+});
+
+app.delete('/api/turn/:sessionId', (req, res) => {
+  discardTurnSession(req.params.sessionId);
+  res.json({ deleted: true });
 });
 
 // TTS REST Endpoint (uses in-memory pre-synthesized cache)

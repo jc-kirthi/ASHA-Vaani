@@ -36,7 +36,7 @@ export interface BeneficiaryRecord {
   category: 'ANC' | 'PNC';
   trimester?: number;
   child_age_days?: number;
-  age: number;
+  age: number | null;
   hb?: number;
   isNew?: boolean;
 }
@@ -99,11 +99,14 @@ export interface DangerSignAlert {
 }
 
 export interface FollowupItem {
+  id: string;
   item: string;
   dueDate: string;
   focus: string;
   source: string;
   completed?: boolean;
+  completedAt?: string | null;
+  status?: 'upcoming' | 'due' | 'overdue' | 'completed' | 'pending_verification';
 }
 
 export interface SavedVisitRecord {
@@ -114,8 +117,22 @@ export interface SavedVisitRecord {
   village: string;
   houseNo: string;
   visitType: string;
+  visitDate?: string;
+  age?: number | null;
+  pregnancyMonths?: number | null;
+  gestationalWeeks?: number | null;
+  babyAgeDays?: number | null;
   weight: number | null;
   bp: string | null;
+  hemoglobin?: number | null;
+  ifaStatus?: string | null;
+  ifaTablets?: number | null;
+  lastAncDate?: string | null;
+  ttStatus?: string | null;
+  ttLastDoseDate?: string | null;
+  vaccinationsGiven?: string[];
+  symptoms?: Array<Record<string, unknown>>;
+  notes?: string | null;
   isFlagged: boolean;
   flaggedSigns: DangerSignAlert[];
   referralSlip?: string;

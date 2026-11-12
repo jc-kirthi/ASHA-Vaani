@@ -37,7 +37,7 @@ export const DangerBanner: React.FC<DangerBannerProps> = ({
               Obstetric Danger Sign
             </span>
             <span className="text-xs font-bold text-red-100">
-              Deterministic Safety Rule Triggered
+              Independent symptom check
             </span>
           </div>
 
@@ -47,19 +47,13 @@ export const DangerBanner: React.FC<DangerBannerProps> = ({
 
           <p className="text-sm font-bold text-red-100 mt-1 flex items-center gap-1.5">
             <ArrowRight className="w-4 h-4 shrink-0" />
-            Please refer to the PHC immediately! (Immediate Clinical Protocol)
+            Seek urgent in-person clinical assessment now. This tool does not replace emergency care.
           </p>
         </div>
       </div>
 
-      {/* Guidelines Source Citation */}
-      <div className="mt-3 pt-3 border-t border-white/20 text-[11px] text-red-100 flex flex-wrap items-center justify-between gap-1">
-        <span>
-          Protocol Source: {flaggedSigns[0]?.source?.document_title || 'MoHFW Protocol Module 6'}
-        </span>
-        <span className="italic">
-          {flaggedSigns[0]?.source?.section_or_page || 'Section 3.2'}
-        </span>
+      <div className="mt-3 pt-3 border-t border-white/20 text-[11px] text-red-100">
+        Clinical reference metadata is unverified and is not presented as a citation.
       </div>
 
       {/* Factual Referral Slip Box */}

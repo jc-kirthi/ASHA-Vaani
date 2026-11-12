@@ -1,0 +1,264 @@
+{
+  "planHash": "5625bcb6357b676e6ba37ecad927120e3165354d1c1db0a1c1cc90d40896e8e3",
+  "phase": "standalone",
+  "recordedAtUtc": "2026-11-12T18:17:08.3617770Z",
+  "retryCount": 3,
+  "resetBaseline": false,
+  "complete": true,
+  "result": {
+    "setupSucceeded": true,
+    "setupDurationMs": 0,
+    "setupFailureOutput": null,
+    "assertions": [
+      {
+        "name": "typescript-check",
+        "kind": "process",
+        "verificationMethod": "exit-code",
+        "passed": true,
+        "timedOut": false,
+        "skipped": false,
+        "skippedReason": null,
+        "exitCode": 0,
+        "outputSample": "\r\n\u003E asha-vaani@0.0.0 lint\r\n\u003E tsc --noEmit\r\n\r\n",
+        "durationMs": 1429
+      },
+      {
+        "name": "production-build",
+        "kind": "process",
+        "verificationMethod": "exit-code",
+        "passed": true,
+        "timedOut": false,
+        "skipped": false,
+        "skippedReason": null,
+        "exitCode": 0,
+        "outputSample": "\r\n\u003E asha-vaani@0.0.0 build\r\n\u003E vite build\r\n\r\n\u001B[33m(!) Your Vite config uses features that are unsupported by \u0060configLoader: \u0027native\u0027\u0060, which is planned to become the default in a future major version of Vite:\r\n  - \u0060__dirname\u0060 (vite.config.ts:52:27). Use \u0060import.meta.dirname\u0060 instead\r\nSet \u0060VITE_CONFIG_NATIVE_IGNORE_WARNING=true\u0060 to suppress this warning.\u001B[39m\r\n\u001B[36mvite v8.3.8 \u001B[32mbuilding client environment for production...\u001B[36m\u001B[39m\r\ntransforming...\r\n\u2713 1677 modules transformed.\r\nrendering chunks...\r\ncomputing gzip size...\r\ndist/registerSW.js                0.13 kB\r\ndist/manifest.webmanifest         0.55 kB\r\ndist/index.html                   1.54 kB \u2502 gzip:   0.58 kB\r\ndist/assets/index-DrgTZ-go.css   42.56 kB \u2502 gzip:   8.05 kB\r\ndist/assets/index-CK8WfBMA.js   339.27 kB \u2502 gzip: 101.28 kB\r\n\r\n\u001B[32m\u2713 built in 738ms\u001B[39m\r\n\r\nPWA v2.0.0\r\nmode      generateSW\r\nprecache  8 entries (374.53 KiB)\r\nfiles generated\r\n  dist/sw.js\r\n  dist/workbox-9c191d2f.js\r\n",
+        "durationMs": 7902
+      },
+      {
+        "name": "tests-pass",
+        "kind": "process",
+        "verificationMethod": "test-results",
+        "passed": true,
+        "timedOut": false,
+        "skipped": false,
+        "skippedReason": null,
+        "exitCode": 0,
+        "outputSample": "\r\n\u003E asha-vaani@0.0.0 test:workflow\r\n\u003E tsx tests/turn_pipeline.test.ts\r\n\r\n1..20\r\nok 1 - 01 complete intake asks only last ANC date\r\nok 2 - 02 split intake retains earlier details\r\nok 3 - 03 missing weight asks for weight only\r\nok 4 - 04 active heavy bleeding and fever flags and refers\r\nok 5 - 05 explicit no bleeding clears\r\nok 6 - 06 bleeding stopped yesterday clears\r\nok 7 - 07 possible spotting asks yes or no\r\nok 8 - 08 correction updates spoken weight\r\nok 9 - 09 duplicate roster name asks which house\r\nok 10 - 10 unknown name creates once and reuses it\r\nok 11 - 11 two people prompt which person\r\nok 12 - 12 saat versus saath asks number clarification\r\nok 13 - 13 newborn age and weight schedule followups\r\nok 14 - 14 encrypted save decrypts with deterministic followups\r\nok 15 - 15 Hindi negated bleeding stays clear\r\nok 16 - 16 Kannada negated bleeding stays clear\r\nok 17 - 17 uncertain danger answer persists through read-back and save\r\nok 18 - 18 negation is scoped to the symptom, not nearby symptoms\r\nok 19 - 19 manual corrections persist with encrypted record and visit-date follow-ups\r\nok 20 - 20 unreadable stored visits block a false successful save\r\nTests: 20 passed, 20 total\r\n",
+        "durationMs": 2062,
+        "testResults": {
+          "testFramework": "unknown",
+          "runnerDetectedFrom": "none",
+          "testsTotal": 0,
+          "testsPassed": 0,
+          "testsFailed": 0,
+          "testsSkipped": 0,
+          "parseFailed": true
+        }
+      },
+      {
+        "name": "provider-fallback-tests",
+        "kind": "process",
+        "verificationMethod": "exit-code",
+        "passed": true,
+        "timedOut": false,
+        "skipped": false,
+        "skippedReason": null,
+        "exitCode": 0,
+        "outputSample": "\r\n\u003E asha-vaani@0.0.0 test:llm\r\n\u003E tsx tests/gemini_resilience.test.ts\r\n\r\nPASS Extraction validation rejects unsupported values and unsupported field claims\r\nPASS Deterministic fallback extracts supported fields from natural visit narration\r\n[LLM] provider=Gemini status=429 error=rate limited\r\n[LLM] provider=Groq model=groq-test-model llm_calls=2 total_ms=2\r\nPASS Test 1 Gemini 429 falls back to Groq and returns filled fields/status\r\n[LLM] provider=Gemini status=503 error=temporarily unavailable\r\n[LLM] provider=Groq model=groq-test-model llm_calls=2 total_ms=1\r\nPASS Test 2 Gemini 503 falls back to Groq\r\n[LLM] provider=Gemini status=429 error=rate limited\r\n[LLM] provider=Groq status=429 error=rate limited\r\n[LLM] provider=Rules llm_calls=2 total_ms=3\r\nPASS Test 3 both providers 429; rules fill Kumari details and no-bleeding stays CLEAR\r\n[LLM] provider=Gemini status=503 error=temporarily unavailable\r\n[LLM] provider=Groq status=503 error=temporarily unavailable\r\n[LLM] provider=Rules llm_calls=2 total_ms=1\r\nPASS unrecognized utterance remains in session and asks for a repeat\r\n[LLM] provider=Gemini status=503 error=temporarily unavailable\r\n[LLM] provider=Groq status=503 error=temporarily unavailable\r\n[LLM] provider=Rules llm_calls=2 total_ms=2\r\nPASS Test 4 deterministic danger engine FLAGS heavy bleeding when both LLMs fail\r\n[LLM] provider=Gemini status=429 error=quota\r\n[LLM] provider=Groq model=groq-test-model llm_calls=2 total_ms=0\r\n[LLM] provider=Groq model=groq-test-model llm_calls=1 total_ms=0\r\n[LLM] provider=Gemini status=429 error=quota\r\n[LLM] provider=Groq model=groq-test-model llm_calls=2 total_ms=0\r\nPASS Test 5 Gemini 429 circuit skips provider for 60 seconds and reopens afterward\r\nPASS Test 6 duplicate final transcript in one session runs extraction once\r\n[LLM] provider=Gemini status=INVALID_JSON error=invalid provider output\r\n[LLM] provider=Gemini status=INVALID_JSON error=invalid provider output\r\n[LLM] provider=Groq model=groq-test-model llm_calls=3 total_ms=0\r\nPASS Test 7 invalid JSON is retried once before switching providers\r\nPASS Groq adapter discovers model and sends validated JSON-schema chat request\r\n[LLM] provider=Rules llm_calls=2 total_ms=1\r\nPASS Test 8 logs, turn responses, and health payload expose no credentials\r\n",
+        "durationMs": 2029
+      },
+      {
+        "name": "python-clinical-unit-tests",
+        "kind": "process",
+        "verificationMethod": "exit-code",
+        "passed": true,
+        "timedOut": false,
+        "skipped": false,
+        "skippedReason": null,
+        "exitCode": 0,
+        "outputSample": "============================================================\r\nRunning ASHA Vaani Unit Tests (Clinical Safety \u0026 Normalizers)\r\n============================================================\r\n\r\nAll Core Unit Tests Completed: 25 passed, 0 failed.\r\nRESULT: PASS\r\n",
+        "durationMs": 137
+      },
+      {
+        "name": "python-danger-sign-evaluation",
+        "kind": "process",
+        "verificationMethod": "exit-code",
+        "passed": true,
+        "timedOut": false,
+        "skipped": false,
+        "skippedReason": null,
+        "exitCode": 0,
+        "outputSample": "======================================================================\r\n       ASHA Vaani Clinical Safety \u0026 Accuracy Evaluation Report        \r\n======================================================================\r\n\r\nBenchmark Evaluation Metrics:\r\n  Total Clinical Utterances Evaluated : 44\r\n  Danger Signs Missed (Target 0)      : 0 (Zero clinical misses)\r\n  False Alarms                        : 0\r\n  Overall Decision Accuracy           : 100.0%\r\n\r\nLanguage Breakdown:\r\n  - Hindi (hi-IN)             : 16/16 correct (100.0%)\r\n  - Kannada (kn-IN)           : 10/10 correct (100.0%)\r\n  - Indian English (en-IN)    : 18/18 correct (100.0%)\r\n======================================================================\r\nRESULT: ALL CLINICAL CRITERIA MET (0 Missed Danger Signs, 0 False Alarms)\r\n",
+        "durationMs": 130
+      },
+      {
+        "name": "web-home-200",
+        "kind": "http-probe",
+        "verificationMethod": "http-status",
+        "passed": true,
+        "timedOut": false,
+        "skipped": false,
+        "skippedReason": null,
+        "exitCode": null,
+        "outputSample": "HTTP 200\n\u003C!doctype html\u003E\r\n\u003Chtml lang=\u0022en\u0022\u003E\r\n  \u003Chead\u003E\n    \u003Cscript type=\u0022module\u0022\u003Eimport { injectIntoGlobalHook } from \u0022/@react-refresh\u0022;\ninjectIntoGlobalHook(window);\nwindow.$RefreshReg$ = () =\u003E {};\nwindow.$RefreshSig$ = () =\u003E (type) =\u003E type;\u003C/script\u003E\n\n    \u003Cscript type=\u0022module\u0022 src=\u0022/@vite/client\u0022\u003E\u003C/script\u003E\n\r\n    \u003Cmeta charset=\u0022UTF-8\u0022 /\u003E\r\n    \u003Cmeta name=\u0022viewport\u0022 content=\u0022width=device-width, initial-scale=1.0\u0022 /\u003E\r\n    \u003Ctitle\u003EASHA Vaani - Healthcare Voice Field Register\u003C/title\u003E\r\n    \u003Cmeta name=\u0022description\u0022 content=\u0022Voice Field Register for ASHA workers. Spoken visit notes in Indic languages converted to verified clinical registers.\u0022 /\u003E\r\n    \u003Cmeta property=\u0022og:title\u0022 content=\u0022ASHA Vaani - Healthcare Voice Field Register\u0022 /\u003E\r\n    \u003Cmeta property=\u0022og:description\u0022 content=\u0022Voice Field Register for ASHA workers. Spoken visit notes in Indic languages converted to verified clinical registers.\u0022 /\u003E\r\n    \u003Cmeta property=\u0022og:type\u0022 content=\u0022website\u0022 /\u003E\r\n    \u003Cmeta name=\u0022twitter:card\u0022 content=\u0022summary_large_image\u0022 /\u003E\r\n    \u003Cmeta name=\u0022theme-color\u0022 content=\u0022#0d9488\u0022 /\u003E\r\n    \u003Cmeta name=\u0022mobile-web-app-capable\u0022 content=\u0022yes\u0022 /\u003E\r\n    \u003Cmeta name=\u0022apple-mobile-web-app-capable\u0022 content=\u0022yes\u0022 /\u003E\r\n    \u003Cmeta name=\u0022apple-mobile-web-app-status-bar-style\u0022 content=\u0022default\u0022 /\u003E\r\n    \u003Cmeta name=\u0022apple-mobile-web-app-title\u0022 content=\u0022ASHA Vaani\u0022 /\u003E\r\n    \u003Clink rel=\u0022apple-touch-icon\u0022 href=\u0022/apple-touch-icon.png\u0022 /\u003E\r\n    \u003Clink rel=\u0022icon\u0022 type=\u0022image/svg\u002Bxml\u0022 href=\u0022/icon.svg\u0022 /\u003E\r\n  \u003Clink rel=\u0022manifest\u0022 href=\u0022/manifest.webmanifest\u0022\u003E\u003C/head\u003E\r\n  \u003Cbody\u003E\r\n    \u003Cdiv id=\u0022root\u0022\u003E\u003C/div\u003E\r\n    \u003Cscript type=\u0022module\u0022 src=\u0022/src/main.tsx\u0022\u003E\u003C/script\u003E\r\n  \u003Cscript id=\u0022vite-plugin-pwa:register-dev-sw\u0022 type=\u0022module\u0022\u003E\nimport registerDevSW from \u0027/@vite-plugin-pwa/pwa-entry-point-loaded\u0027;\nregisterDevSW();\n\u003C/script\u003E\n\u003C/body\u003E\r\n\u003C/html\u003E\r\n\r\n\n--- server output ---\n\r\n\u003E asha-vaani@0.0.0 dev\r\n\u003E tsx server.ts\r\n\r\n\u25C7 injected env (7) from .env // tip: \u2301 auth for agents [www.vestauth.com]\r\n\u001B[33m(!) Your Vite config uses features that are unsupported by \u0060configLoader: \u0027native\u0027\u0060, which is planned to become the default in a future major version of Vite:\r\n  - \u0060__dirname\u0060 (vite.config.ts:52:27). Use \u0060import.meta.dirname\u0060 instead\r\nSet \u0060VITE_CONFIG_NATIVE_IGNORE_WARNING=true\u0060 to suppress this warning.\u001B[39m\r\n[ASHA Vaani] Unified Server running on http://0.0.0.0:3000\r\n[ASHA Vaani] STT: Gnani Prisma v3.0 | TTS: Gnani Timbre v3.0 | LLM: Gemini -\u003E Groq -\u003E Rules\r\n",
+        "durationMs": 3602
+      },
+      {
+        "name": "beneficiary-register-200",
+        "kind": "http-probe",
+        "verificationMethod": "http-status",
+        "passed": true,
+        "timedOut": false,
+        "skipped": false,
+        "skippedReason": null,
+        "exitCode": null,
+        "outputSample": "HTTP 200\n[{\u0022id\u0022:\u0022NEW-1794492743016-hd8r0\u0022,\u0022name\u0022:\u0022Kumari\u0022,\u0022house_no\u0022:\u0022Unknown\u0022,\u0022village\u0022:\u0022Rampur\u0022,\u0022category\u0022:\u0022ANC\u0022,\u0022age\u0022:0,\u0022isNew\u0022:true}]\n--- server output ---\n\r\n\u003E asha-vaani@0.0.0 dev\r\n\u003E tsx server.ts\r\n\r\n\u25C7 injected env (7) from .env // tip: \u2318 custom filepath { path: \u0027/custom/path/.env\u0027 }\r\n",
+        "durationMs": 2047
+      },
+      {
+        "name": "backend-health-200",
+        "kind": "http-probe",
+        "verificationMethod": "http-status",
+        "passed": true,
+        "timedOut": false,
+        "skipped": false,
+        "skippedReason": null,
+        "exitCode": null,
+        "outputSample": "HTTP 200\n{\u0022gnani_key\u0022:true,\u0022llm_key\u0022:true,\u0022fallback_key\u0022:true,\u0022encryption_key\u0022:true,\u0022stt_ok\u0022:true,\u0022tts_ok\u0022:true,\u0022port\u0022:3000}\n--- server output ---\n\r\n\u003E asha-vaani@0.0.0 dev\r\n\u003E tsx server.ts\r\n\r\n\u25C7 injected env (7) from .env // tip: \u2318 override existing { override: true }\r\n",
+        "durationMs": 2537
+      },
+      {
+        "name": "saved-visits-200",
+        "kind": "http-probe",
+        "verificationMethod": "http-status",
+        "passed": false,
+        "timedOut": false,
+        "skipped": false,
+        "skippedReason": null,
+        "exitCode": null,
+        "outputSample": "HTTP 500\n{\u0022error\u0022:\u0022Could not load saved visit records.\u0022}\n--- server output ---\n\r\n\u003E asha-vaani@0.0.0 dev\r\n\u003E tsx server.ts\r\n\r\n\u25C7 injected env (7) from .env // tip: \u2301 auth for agents [www.vestauth.com]\r\n",
+        "durationMs": 2057
+      }
+    ],
+    "executions": [
+      {
+        "source": "typescript-check",
+        "resolvedExecutable": "C:\\Program Files\\nodejs\\npm.CMD",
+        "args": [
+          "run",
+          "lint"
+        ],
+        "cwd": "D:\\ASHA-Vaani\\ASHA-Vaani",
+        "env": {},
+        "prependPath": [],
+        "platform": "win32"
+      },
+      {
+        "source": "production-build",
+        "resolvedExecutable": "C:\\Program Files\\nodejs\\npm.CMD",
+        "args": [
+          "run",
+          "build"
+        ],
+        "cwd": "D:\\ASHA-Vaani\\ASHA-Vaani",
+        "env": {},
+        "prependPath": [],
+        "platform": "win32"
+      },
+      {
+        "source": "tests-pass",
+        "resolvedExecutable": "C:\\Program Files\\nodejs\\npm.CMD",
+        "args": [
+          "run",
+          "test:workflow"
+        ],
+        "cwd": "D:\\ASHA-Vaani\\ASHA-Vaani",
+        "env": {},
+        "prependPath": [],
+        "platform": "win32"
+      },
+      {
+        "source": "provider-fallback-tests",
+        "resolvedExecutable": "C:\\Program Files\\nodejs\\npm.CMD",
+        "args": [
+          "run",
+          "test:llm"
+        ],
+        "cwd": "D:\\ASHA-Vaani\\ASHA-Vaani",
+        "env": {},
+        "prependPath": [],
+        "platform": "win32"
+      },
+      {
+        "source": "python-clinical-unit-tests",
+        "resolvedExecutable": "C:\\Users\\kirth\\AppData\\Local\\Programs\\Python\\Python312\\python.EXE",
+        "args": [
+          "tests/test_all.py"
+        ],
+        "cwd": "D:\\ASHA-Vaani\\ASHA-Vaani",
+        "env": {},
+        "prependPath": [],
+        "platform": "win32"
+      },
+      {
+        "source": "python-danger-sign-evaluation",
+        "resolvedExecutable": "C:\\Users\\kirth\\AppData\\Local\\Programs\\Python\\Python312\\python.EXE",
+        "args": [
+          "scripts/eval.py"
+        ],
+        "cwd": "D:\\ASHA-Vaani\\ASHA-Vaani",
+        "env": {},
+        "prependPath": [],
+        "platform": "win32"
+      },
+      {
+        "source": "web-home-200",
+        "resolvedExecutable": "C:\\Program Files\\nodejs\\npm.CMD",
+        "args": [
+          "run",
+          "dev"
+        ],
+        "cwd": "D:\\ASHA-Vaani\\ASHA-Vaani",
+        "env": {},
+        "prependPath": [],
+        "platform": "win32"
+      },
+      {
+        "source": "beneficiary-register-200",
+        "resolvedExecutable": "C:\\Program Files\\nodejs\\npm.CMD",
+        "args": [
+          "run",
+          "dev"
+        ],
+        "cwd": "D:\\ASHA-Vaani\\ASHA-Vaani",
+        "env": {},
+        "prependPath": [],
+        "platform": "win32"
+      },
+      {
+        "source": "backend-health-200",
+        "resolvedExecutable": "C:\\Program Files\\nodejs\\npm.CMD",
+        "args": [
+          "run",
+          "dev"
+        ],
+        "cwd": "D:\\ASHA-Vaani\\ASHA-Vaani",
+        "env": {},
+        "prependPath": [],
+        "platform": "win32"
+      },
+      {
+        "source": "saved-visits-200",
+        "resolvedExecutable": "C:\\Program Files\\nodejs\\npm.CMD",
+        "args": [
+          "run",
+          "dev"
+        ],
+        "cwd": "D:\\ASHA-Vaani\\ASHA-Vaani",
+        "env": {},
+        "prependPath": [],
+        "platform": "win32"
+      }
+    ]
+  }
+}

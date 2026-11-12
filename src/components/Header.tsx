@@ -1,5 +1,5 @@
 import React from 'react';
-import { Volume2, ShieldAlert, Sparkles, Download, Activity, PlayCircle } from 'lucide-react';
+import { Volume2, Download, Activity } from 'lucide-react';
 import { LanguageCode, NoiseMode } from '../types';
 import { LANGUAGE_CATALOG } from '../data/languageData';
 import { usePWAInstall } from '../hooks/usePWAInstall';
@@ -11,7 +11,6 @@ interface HeaderProps {
   audioLevel: number;
   showJudgeView: boolean;
   onToggleJudgeView: () => void;
-  onOpenDemoScenarios: () => void;
   healthOk: boolean;
   healthMessage: string;
   onRetryHealth: () => void;
@@ -24,7 +23,6 @@ export const Header: React.FC<HeaderProps> = ({
   audioLevel,
   showJudgeView,
   onToggleJudgeView,
-  onOpenDemoScenarios,
   healthOk,
   healthMessage,
   onRetryHealth,
@@ -70,16 +68,6 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Action Controls */}
         <div className="flex items-center gap-1.5">
-          {/* Quick Demo Scenarios Button */}
-          <button
-            onClick={onOpenDemoScenarios}
-            className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded-lg bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 transition"
-            title="Try Demo Scenarios"
-          >
-            <PlayCircle className="w-3.5 h-3.5 text-teal-600" />
-            <span className="hidden sm:inline">Demos</span>
-          </button>
-
           {/* Noise Meter Pill */}
           <div
             className={`flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-semibold border ${

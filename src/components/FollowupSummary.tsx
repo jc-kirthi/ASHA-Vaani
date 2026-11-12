@@ -1,5 +1,5 @@
 import React from 'react';
-import { Calendar, CheckSquare, PlusCircle, ArrowRight, ShieldCheck, HeartHandshake } from 'lucide-react';
+import { Calendar, CheckSquare, PlusCircle, ArrowRight, ShieldCheck } from 'lucide-react';
 import { FollowupItem } from '../types';
 
 interface FollowupSummaryProps {
@@ -8,6 +8,7 @@ interface FollowupSummaryProps {
   followups: FollowupItem[];
   onNextBeneficiary: () => void;
   onViewRecords: () => void;
+  onCompleteFollowup: (followupId: string, completed: boolean) => Promise<void>;
 }
 
 export const FollowupSummary: React.FC<FollowupSummaryProps> = ({
@@ -16,6 +17,7 @@ export const FollowupSummary: React.FC<FollowupSummaryProps> = ({
   followups,
   onNextBeneficiary,
   onViewRecords,
+  onCompleteFollowup,
 }) => {
   return (
     <div className="w-full bg-emerald-50/80 border border-emerald-200 rounded-2xl p-4 shadow-sm space-y-4 animate-fadeIn my-3">
@@ -26,7 +28,7 @@ export const FollowupSummary: React.FC<FollowupSummaryProps> = ({
         </div>
         <div>
           <h3 className="text-base font-bold text-emerald-950">
-            Visit Record Saved Encrypted!
+            Visit record saved securely
           </h3>
           <p className="text-xs text-emerald-700 font-medium">
             Beneficiary: {beneficiaryName} ({beneficiaryId})
@@ -42,7 +44,7 @@ export const FollowupSummary: React.FC<FollowupSummaryProps> = ({
             Spoken Follow-up Checklist
           </span>
           <span className="text-[10px] text-emerald-700 font-normal">
-            Protocol date arithmetic
+            {followups.filter((item) => !item.completed).length} open
           </span>
         </div>
 
@@ -64,6 +66,22 @@ export const FollowupSummary: React.FC<FollowupSummaryProps> = ({
                   </span>
                 </div>
                 <p className="text-xs text-gray-600 font-medium mt-0.5">{item.focus}</p>
+                <div className="mt-2 flex items-center justify-between gap-2">
+                  <span className={`text-[11px] font-bold capitalize ${
+                    item.completed ? 'text-emerald-700' : followupStatus(item) === 'overdue' ? 'text-red-700' : 'text-gray-600'
+                  }`}>
+                    {followupStatus(item)}
+                  </span>
+                  {item.id && (
+                    <button
+                      type="button"
+                      onClick={() => void onCompleteFollowup(item.id, !item.completed)}
+                      className="px-3 py-1.5 rounded-lg bg-teal-700 text-white text-xs font-bold"
+                    >
+                      {item.completed ? 'Reopen' : 'Mark completed'}
+                    </button>
+                  )}
+                </div>
                 <span className="text-[10px] text-gray-400 block mt-1 italic">
                   Source: {item.source}
                 </span>
@@ -94,3 +112,10 @@ export const FollowupSummary: React.FC<FollowupSummaryProps> = ({
     </div>
   );
 };
+
+function followupStatus(item: FollowupItem): string {
+  if (item.completed) return 'completed';
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(item.dueDate)) return 'pending verification';
+  const today = new Date().toISOString().slice(0, 10);
+  return item.dueDate < today ? 'overdue' : item.dueDate === today ? 'due' : 'upcoming';
+}

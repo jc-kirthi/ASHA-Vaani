@@ -4,9 +4,9 @@ import { fileURLToPath } from 'node:url';
 import { evaluateDangerSigns, DANGER_SIGNS_LIST } from '../src/engine/dangerEngine.ts';
 import { generateFollowups } from '../src/engine/followupEngine.ts';
 import { parseWeight } from '../src/engine/numberEngine.ts';
-import { SYNTHETIC_ROSTER } from '../src/data/rosterData.ts';
 import type { BeneficiaryRecord, DangerEngineResult, FollowupItem } from '../src/types/index.ts';
-import { decryptPayload, encryptPayload } from './crypto.ts';
+import { decryptPayload } from './crypto.ts';
+import { saveVisitRecord } from './records.ts';
 import {
   extractWithFallback,
   hasExtractedData,
@@ -19,6 +19,8 @@ export interface TurnField {
   value: FieldValue;
   state: 'confirmed' | 'uncertain' | 'missing';
   evidence: string;
+  detector?: 'LLM' | 'rule_engine' | 'manual_edit';
+  previousValues?: Array<{ value: FieldValue; timestamp: string; evidence: string }>;
 }
 type TurnFields = Record<string, TurnField>;
 interface TurnSession {
@@ -29,6 +31,8 @@ interface TurnSession {
   pendingQuestion: string | null;
   pendingField: string | null;
   duplicateCandidates: BeneficiaryRecord[];
+  pendingDangerSignId: string | null;
+  dangerClarifications: Record<string, 'present' | 'absent'>;
   pendingSave: boolean;
   savedRecord: Record<string, unknown> | null;
 }
@@ -48,6 +52,7 @@ export interface TurnResponse {
   saved_record: Record<string, unknown> | null;
   test_mode: boolean;
   roster_label: string | null;
+  duplicate_candidates: BeneficiaryRecord[];
   rule: string;
   llm_status: 'ready' | 'retried' | 'busy';
   extraction_status: ExtractionDiagnostics | null;
@@ -58,9 +63,10 @@ const BENEFICIARIES_FILE = process.env.ASHA_BENEFICIARIES_FILE || path.join(ROOT
 const sessions = new Map<string, TurnSession>();
 const recentTurns = new Map<string, { startedAt: number; result: Promise<TurnResponse> }>();
 const EMPTY_FIELDS: TurnFields = Object.fromEntries([
-  'name', 'age', 'beneficiaryType', 'pregnancyMonths', 'babyAgeDays', 'houseNo',
-  'visitType', 'weight', 'bpSystolic', 'bpDiastolic', 'hemoglobin', 'lastAncDate',
-  'ttStatus', 'ttLastDoseDate', 'ifaStatus', 'vaccinationsGiven', 'symptoms', 'notes',
+  'name', 'beneficiaryId', 'age', 'beneficiaryType', 'pregnancyMonths', 'gestationalWeeks',
+  'babyAgeDays', 'houseNo', 'village', 'visitType', 'visitDate', 'weight', 'bpSystolic',
+  'bpDiastolic', 'hemoglobin', 'lastAncDate', 'ttStatus', 'ttLastDoseDate', 'ifaStatus',
+  'ifaTablets', 'vaccinationsGiven', 'vaccinationsDue', 'symptoms', 'notes',
 ].map((key) => [key, { value: null, state: 'missing', evidence: '' }]));
 
 const QUESTIONS: Record<string, Record<string, string>> = {
@@ -116,23 +122,51 @@ function question(language: string, field: string): string {
   return lang[field] || QUESTIONS['en-IN'][field] || 'Please clarify this detail.';
 }
 
-function setField(fields: TurnFields, key: string, value: FieldValue, evidence = '', uncertain = false) {
+function setField(
+  fields: TurnFields,
+  key: string,
+  value: FieldValue,
+  evidence = '',
+  uncertain = false,
+  detector: TurnField['detector'] = 'rule_engine'
+) {
   if (value === null || value === undefined || value === '') return;
-  fields[key] = { value, state: uncertain ? 'uncertain' : 'confirmed', evidence };
+  const previous = fields[key];
+  const previousValues = previous?.value !== null && previous?.value !== undefined &&
+      JSON.stringify(previous.value) !== JSON.stringify(value)
+    ? [
+        ...(previous.previousValues || []),
+        { value: previous.value, timestamp: new Date().toISOString(), evidence: previous.evidence },
+      ]
+    : previous?.previousValues;
+  fields[key] = {
+    value,
+    state: uncertain ? 'uncertain' : 'confirmed',
+    evidence,
+    detector,
+    ...(previousValues ? { previousValues } : {}),
+  };
 }
 
 function mergeExtraction(fields: TurnFields, extracted: ExtractedVisitData, source: string) {
   const add = (key: string, value: FieldValue, evidenceKey: string, confidenceKey = evidenceKey) => {
     if (value === null || value === undefined || value === '') return;
     const evidence = extracted.evidence[evidenceKey] || source;
-    setField(fields, key, value, evidence, extracted.confidence[confidenceKey] === 'uncertain');
+    const detector = extracted.extractionDiagnostics?.provider === 'Gemini' ||
+      extracted.extractionDiagnostics?.provider === 'Groq'
+      ? 'LLM'
+      : 'rule_engine';
+    setField(fields, key, value, evidence, extracted.confidence[confidenceKey] === 'uncertain', detector);
   };
   add('name', extracted.beneficiaryName, 'beneficiaryName', 'beneficiary');
   add('age', extracted.age, 'age');
+  add('beneficiaryId', extracted.beneficiaryId, 'beneficiaryName');
   add('beneficiaryType', extracted.beneficiaryType === 'unknown' ? null : extracted.beneficiaryType, 'beneficiaryName');
   add('pregnancyMonths', extracted.pregnancyMonths, 'pregnancyMonths');
+  add('gestationalWeeks', extracted.gestationalWeeks, 'pregnancyMonths');
   add('babyAgeDays', extracted.babyAgeDays, 'babyAgeDays');
   add('houseNo', extracted.houseNo, 'houseNo');
+  add('village', extracted.village, 'village');
   add('visitType', extracted.visitType, 'visitType');
   add('weight', extracted.weight, 'weight');
   add('bpSystolic', extracted.bpSystolic, 'bloodPressure', 'bp');
@@ -142,7 +176,9 @@ function mergeExtraction(fields: TurnFields, extracted: ExtractedVisitData, sour
   add('ttStatus', extracted.ttStatus, 'ttStatus');
   add('ttLastDoseDate', extracted.ttLastDoseDate, 'ttLastDoseDate');
   add('ifaStatus', extracted.ifaStatus || (extracted.ifaTablets !== null ? `${extracted.ifaTablets} tablets` : null), 'ifaStatus', 'ifa');
+  add('ifaTablets', extracted.ifaTablets, 'ifaStatus', 'ifa');
   add('vaccinationsGiven', extracted.vaccinationsGiven.length ? extracted.vaccinationsGiven : null, 'vaccinations');
+  add('vaccinationsDue', null, 'vaccinations');
   add('symptoms', extracted.symptoms.length ? extracted.symptoms.map((s) => ({
     canonicalId: s.canonicalId, negated: s.negated, timing: s.timing, certainty: s.certainty, evidence: s.evidence,
   })) : null, 'symptoms');
@@ -150,7 +186,7 @@ function mergeExtraction(fields: TurnFields, extracted: ExtractedVisitData, sour
 }
 
 function spokenResponse(session: TurnSession, extracted: ExtractedVisitData, danger: DangerEngineResult) {
-  if (danger.decision === 'FLAG') return 'Please refer to the PHC now.';
+  if (danger.decision === 'FLAG') return 'Danger sign recorded. Confirm the visit record; the urgent referral alert remains visible.';
   if (danger.decision === 'ASK' && danger.clarificationQuestions.length) return danger.clarificationQuestions[0];
   if (session.pendingQuestion) return session.pendingQuestion;
   return null;
@@ -168,32 +204,129 @@ async function loadRoster(): Promise<BeneficiaryRecord[]> {
 }
 
 function findMissingField(session: TurnSession): string | null {
+  const incomplete = (key: string) =>
+    !session.fields[key] || session.fields[key].value === null || session.fields[key].state !== 'confirmed';
   const value = (key: string) => session.fields[key]?.value;
-  if (!value('name')) return 'name';
-  if (!value('visitType')) return 'visitType';
-  if (value('weight') === null) return 'weight';
+  if (incomplete('name')) return 'name';
+  if (incomplete('houseNo')) return 'houseNo';
+  if (incomplete('houseNo')) return 'houseNo';
+  if (incomplete('visitType')) return 'visitType';
+  if (incomplete('weight')) return 'weight';
   if (value('visitType') === 'ANC') {
-    if (!value('pregnancyMonths')) return 'pregnancyMonths';
-    if (!value('bpSystolic') || !value('bpDiastolic')) return 'bpSystolic';
-    if (!value('ifaStatus')) return 'ifaStatus';
-    if (!value('lastAncDate')) return 'lastAncDate';
-    if (!value('ttStatus')) return 'ttStatus';
-    if (!value('ttLastDoseDate')) return 'ttStatus';
+    if (incomplete('pregnancyMonths')) return 'pregnancyMonths';
+    if (incomplete('bpSystolic') || incomplete('bpDiastolic')) return 'bpSystolic';
+    if (incomplete('ifaStatus')) return 'ifaStatus';
+    if (incomplete('lastAncDate')) return 'lastAncDate';
+    if (incomplete('ttStatus')) return 'ttStatus';
+    if (incomplete('ttLastDoseDate')) return 'ttStatus';
   }
-  if (value('visitType') === 'PNC') {
-    if (!value('babyAgeDays')) return 'babyAgeDays';
+  if (value('visitType') === 'PNC' && incomplete('babyAgeDays')) {
+    return 'babyAgeDays';
   }
   return null;
 }
 
+function validateCorrection(key: string, value: unknown): unknown {
+  const numericRanges: Record<string, [number, number]> = {
+    age: [1, 120],
+    pregnancyMonths: [1, 10],
+    gestationalWeeks: [1, 42],
+    babyAgeDays: [0, 3650],
+    weight: [0.8, 250],
+    bpSystolic: [40, 300],
+    bpDiastolic: [20, 200],
+    hemoglobin: [2, 25],
+    ifaTablets: [0, 1000],
+  };
+  if (key in numericRanges) {
+    const number = typeof value === 'number' ? value : Number(value);
+    const [min, max] = numericRanges[key];
+    if (!Number.isFinite(number) || number < min || number > max) {
+      throw new Error(`The correction for ${key} is outside the accepted range.`);
+    }
+    return number;
+  }
+  if (key === 'visitType') {
+    if (!['ANC', 'PNC', 'immunisation'].includes(String(value))) {
+      throw new Error('Visit type must be ANC, PNC, or immunisation.');
+    }
+    return value;
+  }
+  if (key === 'beneficiaryType') {
+    if (!['pregnant_woman', 'newborn', 'mother', 'unknown'].includes(String(value))) {
+      throw new Error('Beneficiary type is invalid.');
+    }
+    return value;
+  }
+  if (key === 'vaccinationsGiven' || key === 'vaccinationsDue') {
+    const items = Array.isArray(value) ? value : String(value).split(',');
+    if (items.some((item) => typeof item !== 'string' || item.trim().length > 80)) {
+      throw new Error('Vaccination names must be text.');
+    }
+    return items.map((item) => item.trim()).filter(Boolean);
+  }
+  if (key === 'symptoms') {
+    if (typeof value !== 'string' && !Array.isArray(value)) {
+      throw new Error('Symptoms must be entered as text or a list.');
+    }
+    return value;
+  }
+  if (key === 'lastAncDate' || key === 'ttLastDoseDate' || key === 'visitDate') {
+    if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value) ||
+        Number.isNaN(Date.parse(`${value}T00:00:00`))) {
+      throw new Error(`The correction for ${key} must be a date in YYYY-MM-DD format.`);
+    }
+    return value;
+  }
+  if (typeof value !== 'string' || value.trim().length > 500) {
+    throw new Error(`The correction for ${key} must be text of 500 characters or fewer.`);
+  }
+  return value.trim();
+}
+
+function makeSavedRecord(session: TurnSession, danger: DangerEngineResult): Record<string, unknown> {
+  const fields = session.fields;
+  const visitDate = String(fields.visitDate.value || new Date().toISOString().slice(0, 10));
+  const followups = generateFollowups(
+    String(fields.visitType.value || 'ANC'),
+    fields.gestationalWeeks.value === null ? null : Number(fields.gestationalWeeks.value),
+    fields.babyAgeDays.value === null ? null : Number(fields.babyAgeDays.value),
+    fields.ifaTablets.value === null ? null : Number(fields.ifaTablets.value),
+    visitDate
+  );
+  return {
+    id: `REC-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    timestamp: new Date().toISOString(),
+    beneficiaryName: fields.name.value,
+    beneficiaryId: fields.beneficiaryId.value || fields.name.value,
+    village: fields.village.value,
+    houseNo: fields.houseNo.value,
+    visitType: fields.visitType.value,
+    isFlagged: danger.decision === 'FLAG',
+    dangerDecision: danger.decision,
+    flaggedSigns: danger.flaggedSigns,
+    referralSlip: danger.referralSlip,
+    ...Object.fromEntries(Object.entries(fields).map(([key, field]) => [key, field.value])),
+    bp: fields.bpSystolic.value !== null && fields.bpDiastolic.value !== null
+      ? `${fields.bpSystolic.value}/${fields.bpDiastolic.value}` : null,
+    transcript: session.transcript,
+    followups,
+  };
+}
+
 function buildReadBack(fields: TurnFields, language: string): string {
   const parts: string[] = [];
+  const name = fields.name?.value;
+  const visitType = fields.visitType?.value;
+  if (name) parts.push(String(name));
+  if (visitType) parts.push(`${String(visitType)} visit`);
   const labels = language === 'kn-IN'
     ? ['ವಯಸ್ಸು', 'ಗರ್ಭಾವಸ್ಥೆ', 'ಮಗುವಿನ ವಯಸ್ಸು', 'ತೂಕ', 'ಸಿಸ್ಟೊಲಿಕ್ BP', 'ಡಯಾಸ್ಟೊಲಿಕ್ BP', 'ಹಿಮೋಗ್ಲೋಬಿನ್', 'ಕೊನೆಯ ANC', 'TT ಸ್ಥಿತಿ', 'ಕೊನೆಯ TT ಡೋಸ್']
     : language === 'hi-IN'
       ? ['उम्र', 'गर्भावस्था', 'बच्चे की उम्र', 'वजन', 'ऊपरी BP', 'निचला BP', 'हीमोग्लोबिन', 'पिछली ANC', 'TT स्थिति', 'आखिरी TT खुराक']
       : ['Age', 'Pregnancy', 'Baby age', 'Weight', 'systolic BP', 'diastolic BP', 'haemoglobin', 'Last ANC', 'TT status', 'Last TT dose'];
   const saveText = QUESTIONS[language]?.save || QUESTIONS['en-IN'].save;
+  if (fields.houseNo?.value) parts.push(`House ${fields.houseNo.value}`);
   for (const [[key], label] of [
     [['age'], labels[0]], [['pregnancyMonths'], labels[1]], [['babyAgeDays'], labels[2]],
     [['weight'], labels[3]], [['bpSystolic'], labels[4]], [['bpDiastolic'], labels[5]],
@@ -212,6 +345,14 @@ function buildReadBack(fields: TurnFields, language: string): string {
       parts.push(`${label} ${value}`);
     }
   }
+  const optionalMissing = [
+    ['hemoglobin', 'haemoglobin'],
+    ['ifaTablets', 'IFA tablet quantity'],
+    ['vaccinationsGiven', 'vaccinations'],
+    ['vaccinationsDue', 'vaccinations due'],
+    ['symptoms', 'symptoms'],
+  ].filter(([key]) => fields[key]?.value === null).map(([, label]) => label);
+  if (optionalMissing.length) parts.push(`Not recorded: ${optionalMissing.join(', ')}`);
   return `${parts.join('. ')}. ${saveText}`.trim();
 }
 
@@ -262,53 +403,75 @@ async function processTurnOnce(
     id: input.session_id,
     language,
     transcript: '',
-    fields: structuredClone(EMPTY_FIELDS),
+    fields: {
+      ...structuredClone(EMPTY_FIELDS),
+      visitDate: {
+        value: new Date().toISOString().slice(0, 10),
+        state: 'confirmed',
+        evidence: 'System visit date',
+      },
+    },
     pendingQuestion: null,
     pendingField: null,
     duplicateCandidates: [],
+    pendingDangerSignId: null,
+    dangerClarifications: {},
     pendingSave: false,
     savedRecord: null,
   };
   session.language = language;
   const previousQuestion = session.pendingQuestion;
   const pendingField = session.pendingField;
-  session.transcript = [session.transcript, text].filter(Boolean).join(' ');
+  session.transcript = [session.transcript, text].filter(Boolean).join('. ');
   const currentLower = text.toLowerCase();
   if (session.savedRecord) {
     sessions.set(session.id, session);
-    return response(session, emptyExtraction(), evaluateDangerSigns(session.transcript, language), [], null, [], session.savedRecord);
+    const storedDanger = evaluateDangerSigns(
+      session.transcript,
+      language,
+      String(session.fields.name.value || 'Beneficiary'),
+      String(session.fields.beneficiaryId.value || 'ID-Pending'),
+      'ASHA-001',
+      session.dangerClarifications
+    );
+    if (session.savedRecord.isFlagged === true) {
+      storedDanger.decision = 'FLAG';
+      storedDanger.flaggedSigns = Array.isArray(session.savedRecord.flaggedSigns)
+        ? session.savedRecord.flaggedSigns as DangerEngineResult['flaggedSigns']
+        : storedDanger.flaggedSigns;
+      storedDanger.referralSlip = typeof session.savedRecord.referralSlip === 'string'
+        ? session.savedRecord.referralSlip
+        : storedDanger.referralSlip;
+    }
+    return response(session, emptyExtraction(), storedDanger, [], null, [], session.savedRecord);
   }
 
   const allowedCorrections = new Set(Object.keys(EMPTY_FIELDS));
   for (const [key, value] of Object.entries(input.corrections || {})) {
-    if (!allowedCorrections.has(key) || value === null || value === undefined || value === '') continue;
-    setField(session.fields, key, value, 'Manual keypad correction');
+    if (!allowedCorrections.has(key)) throw new Error(`Unsupported correction field: ${key}`);
+    if (value === null || value === undefined || value === '') continue;
+    setField(session.fields, key, validateCorrection(key, value), 'Manual keypad correction', false, 'manual_edit');
+  }
+  if (
+    session.duplicateCandidates.length &&
+    session.duplicateCandidates.some((candidate) => candidate.id === session.fields.beneficiaryId.value)
+  ) {
+    session.duplicateCandidates = [];
+    session.pendingQuestion = null;
+    session.pendingField = null;
   }
 
   if (session.pendingSave && /^(yes|yeah|yep|correct|okay|ok|save|haan|हां|हाँ|ಹೌದು)\b/i.test(currentLower)) {
-    const record: Record<string, unknown> = {
-      id: `REC-${Date.now()}`,
-      timestamp: new Date().toISOString(),
-      beneficiaryName: session.fields.name.value,
-      beneficiaryId: session.fields.name.value,
-      houseNo: session.fields.houseNo.value,
-      visitType: session.fields.visitType.value,
-      weight: session.fields.weight.value,
-      bp: session.fields.bpSystolic.value && session.fields.bpDiastolic.value
-        ? `${session.fields.bpSystolic.value}/${session.fields.bpDiastolic.value}` : null,
-      isFlagged: false,
-      flaggedSigns: [],
-      ...Object.fromEntries(Object.entries(session.fields).map(([key, field]) => [key, field.value])),
-      transcript: session.transcript,
-    };
-    const followups = generateFollowups(
-      String(session.fields.visitType.value || 'ANC'),
-      session.fields.pregnancyMonths.value ? Number(session.fields.pregnancyMonths.value) * 4 : null,
-      session.fields.babyAgeDays.value ? Number(session.fields.babyAgeDays.value) : null,
-      null
+    const danger = evaluateDangerSigns(
+      session.transcript,
+      language,
+      String(session.fields.name.value || 'Beneficiary'),
+      String(session.fields.beneficiaryId.value || 'ID-Pending'),
+      'ASHA-001',
+      session.dangerClarifications
     );
-    record.followups = followups;
-    const encryptedRecord = encryptPayload(record);
+    const record = makeSavedRecord(session, danger);
+    const encryptedRecord = await saveVisitRecord(record as Parameters<typeof saveVisitRecord>[0]);
     session.savedRecord = record;
     session.pendingSave = false;
     session.pendingQuestion = null;
@@ -318,15 +481,37 @@ async function processTurnOnce(
       : language === 'hi-IN'
         ? 'भेंट सुरक्षित रूप से सेव हुई। आगे की जांच सूची यह रही।'
         : 'Visit saved securely. Here is the follow-up list.';
-    return response(session, emptyExtraction(), evaluateDangerSigns(session.transcript, language), [], savedLine, followups, record, encryptedRecord);
+    return response(session, emptyExtraction(), danger, [], savedLine, record.followups as FollowupItem[], record, encryptedRecord);
   }
 
-  let extractionText = session.transcript;
-  if (pendingField && pendingField !== 'name' && pendingField !== 'visitType' && pendingField !== 'weight') {
-    extractionText += ` ${pendingField === 'lastAncDate' ? 'last ANC date' : pendingField === 'ttStatus' ? 'TT status' : pendingField} ${text}`;
-  } else if (pendingField === 'weight') {
-    extractionText += ` weight ${text}`;
-  }
+  const extractionLabels: Record<string, string> = {
+    name: 'beneficiary name',
+    houseNo: 'house number',
+    visitType: 'visit type',
+    pregnancyMonths: 'pregnancy duration in months',
+    weight: 'weight',
+    bpSystolic: 'blood pressure',
+    lastAncDate: 'last ANC date',
+    ttStatus: 'TT status and last TT dose date',
+    ifaStatus: 'IFA status',
+    babyAgeDays: 'baby age in days',
+  };
+  const pendingFieldPattern: Record<string, RegExp> = {
+    name: /\b(name|beneficiary)\b/i,
+    houseNo: /\b(house|ghar)\b/i,
+    visitType: /\b(anc|pnc|postnatal|immunisation|immunization)\b/i,
+    pregnancyMonths: /\b(months?|weeks?)\b/i,
+    weight: /\b(weight|kilo|kg|vajan|wazan)\b/i,
+    bpSystolic: /\b(bp|blood pressure)\b/i,
+    lastAncDate: /\b(last anc|anc date|last checkup|last visit)\b/i,
+    ttStatus: /\b(tt|td|dose|doses)\b/i,
+    ifaStatus: /\b(ifa|iron)\b/i,
+    babyAgeDays: /\b(baby|days?|weeks?)\b/i,
+  };
+  const extractionText = pendingField && extractionLabels[pendingField] &&
+    !pendingFieldPattern[pendingField]?.test(text)
+    ? `${extractionLabels[pendingField]} ${text}`
+    : text;
   const extracted = text ? await extract(extractionText, language) : emptyExtraction();
   mergeExtraction(session.fields, extracted, text);
 
@@ -336,7 +521,10 @@ async function processTurnOnce(
       const selected = session.duplicateCandidates.find((item) => item.house_no === digits);
       if (selected) {
         setField(session.fields, 'name', selected.name, text);
+        setField(session.fields, 'beneficiaryId', selected.id, text);
         setField(session.fields, 'houseNo', selected.house_no, text);
+        setField(session.fields, 'village', selected.village, text);
+        setField(session.fields, 'age', selected.age, text);
         session.duplicateCandidates = [];
       }
     }
@@ -365,7 +553,7 @@ async function processTurnOnce(
   session.pendingQuestion = null;
   session.pendingField = null;
 
-  const roster = [...SYNTHETIC_ROSTER, ...await loadRoster()];
+  const roster = await loadRoster();
   const mentionedNames = extracted.beneficiaryNames;
   if (mentionedNames.length > 1 && !previousQuestion?.includes('person')) {
     session.pendingQuestion = question(language, 'choosePerson');
@@ -380,27 +568,55 @@ async function processTurnOnce(
   if (currentName && !session.pendingQuestion) {
     const matches = roster.filter((item) => item.name.toLowerCase() === currentName.toLowerCase());
     const house = String(session.fields.houseNo.value || '');
+    const village = String(session.fields.village.value || '');
     const sameNameRepeated = (text.toLowerCase().split(currentName.toLowerCase()).length - 1) > 1;
     if (matches.length > 1 && (!house || sameNameRepeated)) {
       session.duplicateCandidates = matches;
       session.pendingQuestion = question(language, 'chooseHouse');
       session.pendingField = 'houseNo';
-    } else if (matches.length > 1 && house && !matches.some((item) => item.house_no === house)) {
+    } else if (matches.length > 1 && house && !matches.some((item) =>
+      item.house_no === house && (!village || item.village.toLowerCase() === village.toLowerCase())
+    )) {
+      session.duplicateCandidates = matches;
       session.pendingQuestion = question(language, 'chooseHouse');
       session.pendingField = 'houseNo';
-    } else if (!matches.length) {
+    } else if (matches.length > 1 && house) {
+      const selected = matches.find((item) =>
+        item.house_no === house && (!village || item.village.toLowerCase() === village.toLowerCase())
+      );
+      if (selected) {
+        setField(session.fields, 'beneficiaryId', selected.id, currentName);
+        setField(session.fields, 'village', selected.village, currentName);
+        if (session.fields.age.value === null && selected.age !== null) {
+          setField(session.fields, 'age', selected.age, currentName);
+        }
+      }
+    } else if (matches.length === 1 && (!house || matches[0].house_no === house)) {
+      setField(session.fields, 'beneficiaryId', matches[0].id, currentName);
+      if (!house) setField(session.fields, 'houseNo', matches[0].house_no, currentName);
+      if (!village) setField(session.fields, 'village', matches[0].village, currentName);
+      if (session.fields.age.value === null && matches[0].age !== null) {
+        setField(session.fields, 'age', matches[0].age, currentName);
+      }
+    } else {
+      const houseNo = String(session.fields.houseNo.value || '');
+      if (!houseNo) {
+        // Do not create a beneficiary record until identifying details are available.
+      } else {
       const created: BeneficiaryRecord = {
         id: `NEW-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         name: currentName,
-        house_no: String(session.fields.houseNo.value || 'Unknown'),
-        village: 'Rampur',
+        house_no: houseNo,
+        village: String(session.fields.village.value || ''),
         category: session.fields.visitType.value === 'PNC' ? 'PNC' : 'ANC',
-        age: Number(session.fields.age.value) || 0,
+        age: typeof session.fields.age.value === 'number' ? session.fields.age.value : null,
         isNew: true,
       };
       await fs.mkdir(path.dirname(BENEFICIARIES_FILE), { recursive: true });
       await fs.writeFile(BENEFICIARIES_FILE, JSON.stringify([...await loadRoster(), created], null, 2), 'utf8');
-      rosterLabel = 'synthetic/demo';
+      setField(session.fields, 'beneficiaryId', created.id, currentName);
+      rosterLabel = 'created';
+      }
     }
   }
 
@@ -422,42 +638,57 @@ async function processTurnOnce(
     session.fields.bpSystolic.state = 'uncertain';
     session.fields.bpDiastolic.state = 'uncertain';
   }
-  const dangerText = pendingField === 'symptoms'
-    ? (/^(yes|yeah|haan|हां|हाँ|ಹೌದು)\b/i.test(currentLower)
-      ? 'active bleeding'
-      : /^(no|nope|nahi|नहीं|ಇಲ್ಲ)\b/i.test(currentLower)
-        ? 'no bleeding'
-        : session.transcript)
-    : session.transcript;
-  const danger = evaluateDangerSigns(dangerText, language, currentName || 'Beneficiary', 'ID-Pending');
-  if (danger.decision === 'FLAG') {
-    const record: Record<string, unknown> = {
-      id: `REC-${Date.now()}`,
-      timestamp: new Date().toISOString(),
-      beneficiaryName: session.fields.name.value,
-      beneficiaryId: session.fields.name.value,
-      houseNo: session.fields.houseNo.value,
-      visitType: session.fields.visitType.value,
-      weight: session.fields.weight.value,
-      bp: session.fields.bpSystolic.value && session.fields.bpDiastolic.value
-        ? `${session.fields.bpSystolic.value}/${session.fields.bpDiastolic.value}` : null,
-      ...Object.fromEntries(Object.entries(session.fields).map(([key, field]) => [key, field.value])),
-      transcript: session.transcript,
-      isFlagged: true,
-      flaggedSigns: danger.flaggedSigns,
-      referralSlip: danger.referralSlip,
-      followups: [],
-    };
-    const encryptedRecord = encryptPayload(record);
-    session.savedRecord = record;
-    session.pendingSave = false;
-    session.pendingQuestion = null;
-    sessions.set(session.id, session);
-    const referralLine = 'Please refer to the PHC now.';
-    const announcement = rosterLabel ? `New beneficiary ${currentName} added. ` : '';
-    return response(session, extracted, danger, [], `${announcement}${referralLine}`, [], record, encryptedRecord, null, rosterLabel);
+  const affirmativeSymptomAnswer = /^(yes|yeah|yep|haan|हां|हाँ|ಹೌದು)\b/i.test(currentLower);
+  const negativeSymptomAnswer = /^(no|nope|nahi|नहीं|ಇಲ್ಲ)\b/i.test(currentLower);
+  const symptomSignId = pendingField === 'symptoms' ? session.pendingDangerSignId : null;
+  if (symptomSignId && (affirmativeSymptomAnswer || negativeSymptomAnswer)) {
+    session.dangerClarifications[symptomSignId] = affirmativeSymptomAnswer ? 'present' : 'absent';
+    const existing = Array.isArray(session.fields.symptoms.value)
+      ? session.fields.symptoms.value as Array<Record<string, unknown>>
+      : [];
+    setField(session.fields, 'symptoms', [
+      ...existing.filter((item) => item.canonicalId !== symptomSignId),
+      {
+        canonicalId: symptomSignId,
+        negated: negativeSymptomAnswer,
+        timing: 'current',
+        certainty: 'high',
+        evidence: text,
+      },
+    ], text, false, 'manual_edit');
+    session.pendingDangerSignId = null;
+  } else if (text) {
+    for (const sign of DANGER_SIGNS_LIST) {
+      if (sign.synonyms.some((synonym) => currentLower.includes(synonym.toLowerCase()))) {
+        delete session.dangerClarifications[sign.id];
+      }
+    }
   }
-  if (extracted.extractionDiagnostics?.provider === 'Rules' && !hasExtractedData(extracted)) {
+  const danger = evaluateDangerSigns(
+    session.transcript,
+    language,
+    currentName || 'Beneficiary',
+    String(session.fields.beneficiaryId.value || 'ID-Pending'),
+    'ASHA-001',
+    session.dangerClarifications
+  );
+  if (danger.decision === 'FLAG') {
+    session.pendingSave = true;
+    session.pendingQuestion = question(language, 'save');
+    sessions.set(session.id, session);
+    const announcement = rosterLabel ? `New beneficiary ${currentName} added. ` : '';
+    const readBack = `Urgent referral alert. ${buildReadBack(session.fields, language)}`;
+    return response(session, extracted, danger, [session.pendingQuestion], `${announcement}${spokenResponse(session, extracted, danger)}`,
+      [], null, null, readBack, rosterLabel);
+  }
+  const isDangerClarification = Boolean(
+    symptomSignId && (affirmativeSymptomAnswer || negativeSymptomAnswer)
+  );
+  if (
+    extracted.extractionDiagnostics?.provider === 'Rules' &&
+    !hasExtractedData(extracted) &&
+    !isDangerClarification
+  ) {
     const retryMessage = language === 'hi-IN'
       ? 'माफ़ कीजिए, मैं समझ नहीं पाया। कृपया एक बार फिर कहें।'
       : language === 'kn-IN'
@@ -487,6 +718,7 @@ async function processTurnOnce(
         ? `क्या अभी ${label} है? कृपया हाँ या नहीं कहें।`
         : `Is there ${label} now? Please answer yes or no.`;
     session.pendingField = 'symptoms';
+    session.pendingDangerSignId = danger.evidence.find((item) => item.state === 'ASK')?.signId || null;
   } else {
     if (parsedWeight.isConfusable) {
       session.pendingField = 'weight';
@@ -543,7 +775,7 @@ function response(
     session_id: session.id,
     transcript: session.transcript,
     extracted,
-    fields: session.fields,
+    fields: structuredClone(session.fields),
     questions,
     answer_text: answerText,
     danger,
@@ -555,6 +787,7 @@ function response(
     saved_record: record,
     test_mode: process.env.LLM_PROVIDER === 'mock',
     roster_label: rosterLabel,
+    duplicate_candidates: [...session.duplicateCandidates],
     rule,
     llm_status: llmStatus,
     extraction_status: extracted.extractionDiagnostics || null,
@@ -564,6 +797,13 @@ function response(
 export function resetTurnSessions(): void {
   sessions.clear();
   recentTurns.clear();
+}
+
+export function discardTurnSession(sessionId: string): void {
+  sessions.delete(sessionId);
+  for (const key of recentTurns.keys()) {
+    if (key.startsWith(`${sessionId}\u0000`)) recentTurns.delete(key);
+  }
 }
 
 export function decryptSavedTurn(token: string): Record<string, unknown> {

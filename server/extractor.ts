@@ -1,5 +1,6 @@
 import { GoogleGenAI } from '@google/genai';
 import { extractWithGroq, LlmProviderError } from './groq.ts';
+import { buildExtractionPrompt } from './extractionPrompt.ts';
 
 export interface ExtractedVisitData {
   beneficiaryName: string | null;
@@ -109,14 +110,32 @@ export const responseJsonSchema = {
     evidence: {
       type: 'object',
       additionalProperties: false,
-      required: ['beneficiaryName', 'age', 'houseNo', 'weight', 'bloodPressure', 'ifaStatus'],
+      required: [
+        'beneficiaryName', 'age', 'houseNo', 'village', 'visitType', 'pregnancyMonths',
+        'gestationalWeeks', 'babyAgeDays', 'weight', 'bloodPressure', 'hemoglobin',
+        'lastAncDate', 'ttStatus', 'ttLastDoseDate', 'ifaStatus', 'ifaTablets',
+        'vaccinations', 'symptoms', 'notes',
+      ],
       properties: {
         beneficiaryName: { type: ['string', 'null'] },
         age: { type: ['string', 'null'] },
         houseNo: { type: ['string', 'null'] },
+        village: { type: ['string', 'null'] },
+        visitType: { type: ['string', 'null'] },
+        pregnancyMonths: { type: ['string', 'null'] },
+        gestationalWeeks: { type: ['string', 'null'] },
+        babyAgeDays: { type: ['string', 'null'] },
         weight: { type: ['string', 'null'] },
         bloodPressure: { type: ['string', 'null'] },
+        hemoglobin: { type: ['string', 'null'] },
+        lastAncDate: { type: ['string', 'null'] },
+        ttStatus: { type: ['string', 'null'] },
+        ttLastDoseDate: { type: ['string', 'null'] },
         ifaStatus: { type: ['string', 'null'] },
+        ifaTablets: { type: ['string', 'null'] },
+        vaccinations: { type: ['string', 'null'] },
+        symptoms: { type: ['string', 'null'] },
+        notes: { type: ['string', 'null'] },
       },
     },
   },
@@ -142,7 +161,10 @@ const REQUIRED_EXTRACTION_FIELDS = [
   'symptoms', 'notes', 'evidence',
 ];
 const REQUIRED_EVIDENCE_FIELDS = [
-  'beneficiaryName', 'age', 'houseNo', 'weight', 'bloodPressure', 'ifaStatus',
+  'beneficiaryName', 'age', 'houseNo', 'village', 'visitType', 'pregnancyMonths',
+  'gestationalWeeks', 'babyAgeDays', 'weight', 'bloodPressure', 'hemoglobin',
+  'lastAncDate', 'ttStatus', 'ttLastDoseDate', 'ifaStatus', 'ifaTablets',
+  'vaccinations', 'symptoms', 'notes',
 ];
 const NULLABLE_STRING_FIELDS = [
   'beneficiaryName', 'houseNo', 'village', 'lastAncDate', 'ttStatus',
@@ -415,21 +437,31 @@ export function extractWithMock(transcript: string, _lang = 'en-IN'): ExtractedV
   const capture = (pattern: RegExp): string | null => text.match(pattern)?.[1]?.trim() || null;
   const numeric = (pattern: RegExp): number | null => {
     const value = capture(pattern);
-    if (value) return Number(value);
-    const word = lower.match(/\b(one|two|three|four|five|six|seven|eight|nine|ten)\b/);
-    const words: Record<string, number> = {
-      one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7,
-      eight: 8, nine: 9, ten: 10,
-    };
-    return word ? words[word[1]] : null;
+    return value ? Number(value) : null;
   };
   const ignoredNames = new Set([
     'anc', 'bp', 'ifa', 'tt', 'phc', 'house', 'weight', 'visit', 'newborn',
     'mother', 'pregnant', 'no', 'yes', 'she', 'he', 'baby', 'patient', 'the',
+    'i', 'visited', 'today', 'yesterday', 'tomorrow', 'met', 'saw', 'from',
+    'lives', 'living', 'in', 'at', 'for', 'is', 'was', 'has', 'had', 'her',
+    'his', 'my', 'last', 'this', 'that', 'and', 'aur', 'age', 'years', 'year',
+    'old', 'months', 'month', 'days', 'day', 'weight', 'blood', 'pressure',
   ]);
+  const cleanName = (candidate: string) => {
+    const words = candidate.trim().split(/\s+/);
+    while (words.length && ignoredNames.has(words[0].toLowerCase())) words.shift();
+    const stopIndex = words.findIndex((word) => ignoredNames.has(word.toLowerCase()));
+    return words.slice(0, stopIndex < 0 ? words.length : stopIndex).join(' ');
+  };
+  const capitalizedNames = (text.match(/\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2}\b/g) || [])
+    .map(cleanName)
+    .filter((name) => name && !ignoredNames.has(name.toLowerCase()));
+  const cueNames = (text.match(/\b(?:visited|beneficiary(?: named)?|name is)\s+[A-Za-z][A-Za-z'-]*(?:\s+[A-Za-z][A-Za-z'-]*){0,2}/gi) || [])
+    .map((candidate) => cleanName(candidate.replace(/^(visited|beneficiary(?: named)?|name is)\s+/i, '')))
+    .filter(Boolean);
   const names = Array.from(new Set(
-    (text.match(/\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2}\b/g) || [])
-      .filter((name) => !ignoredNames.has(name.toLowerCase()))
+    (cueNames.length ? cueNames : /\b(?:and|aur)\b|&/i.test(text) ? capitalizedNames : capitalizedNames.slice(0, 1))
+      .filter((candidate) => !ignoredNames.has(candidate.toLowerCase()))
   ));
   const name = names[0] || capture(/(?:name is|beneficiary)\s+([A-Za-z][A-Za-z ]+)/i);
   const age = numeric(/\b(\d{1,2})\s*(?:years?\s*old|year old|yrs?\b)/i);
@@ -444,6 +476,8 @@ export function extractWithMock(transcript: string, _lang = 'en-IN'): ExtractedV
       ? (numeric(/\b(\d{1,2})\s*weeks?\s*old\b/i) ?? 0) * 7 : null);
   const houseNo = capture(/\bhouse(?:\s*(?:number|no\.?))?\s*([A-Za-z0-9-]+)\b/i) ||
     capture(/\bghar\s*(?:number|no\.?)?\s*(\d+)\b/i);
+  const village = capture(/\bvillage\s*(?:is|:)?\s*([A-Za-z][A-Za-z'-]*(?:\s+[A-Za-z][A-Za-z'-]*){0,2})/i) ||
+    capture(/\bhouse(?:\s*(?:number|no\.?))?\s*[A-Za-z0-9-]+\s+in\s+([A-Za-z][A-Za-z'-]*)/i);
   const weightText = capture(/(?:weight|weighs?|vajan|wazan|bhaar|ತೂಕ)\s*(?:is|of|hai|:)?\s*((?:\d+(?:\.\d+)?|[\w-]+)(?:\s+(?:point|kilo|kg|kilograms?|grams?))?(?:\s+\d+\s*(?:grams?|g))?)/i) ||
     capture(/\b(\d+(?:\.\d+)?)\s*(?:kg|kilo(?:grams?)?)\b/i);
   let weight = weightText ? Number(weightText.match(/\d+(?:\.\d+)?/)?.[0]) : null;
@@ -453,12 +487,15 @@ export function extractWithMock(transcript: string, _lang = 'en-IN'): ExtractedV
   const bp = text.match(/\b(?:bp|blood pressure)\s*(?:is|of|:)?\s*(\d{2,3})\s*(?:by|\/)\s*(\d{2,3})\b/i);
   const hemoglobin = numeric(/\b(?:haemoglobin|hemoglobin|hb)\s*(?:is|of|:)?\s*(\d+(?:\.\d+)?)/i);
   const lastAncDate = capture(/\b(?:last anc|anc date|last checkup|last visit)\s*(?:was|on|:)?\s*(\d{4}-\d{2}-\d{2}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4})/i);
-  const ttStatus = capture(/\b(?:tt|td)\s*(?:status|dose|doses|injection)?\s*(?:is|:)?\s*((?:one|two|three|1|2|3)\s*(?:dose|doses)?|not taken|none|complete|completed)\b/i);
+  const ttStatus = capture(/\b((?:one|two|three|1|2|3)\s+(?:tt|td)\s+doses?)\b/i) ||
+    capture(/\b(?:tt|td)\s*(?:status|dose|doses|injection)?\s*(?:is|:)?\s*((?:one|two|three|1|2|3)\s*(?:dose|doses)?|not taken|none|complete|completed)\b/i);
   const ttLastDoseDate = capture(/\b(?:last tt|last td|tt last dose|td last dose|last dose)\s*(?:was|on|date|:)?\s*(\d{4}-\d{2}-\d{2}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4})/i);
   const ifaStatus = /not taking ifa|not taking.*iron|ifa.*not regularly|not.*ifa regularly/i.test(lower)
     ? 'not taking regularly'
-    : capture(/\b(?:ifa|iron tablets?)\s*(?:status|:)?\s*(taken regularly|not taking regularly|taking regularly|not taken|taken)\b/i);
-  const ifaTablets = numeric(/\b(\d{1,3})\s*(?:ifa|iron)\s*(?:tablets?|pills?|goli)/i);
+    : capture(/\b(?:ifa|iron tablets?)\s*(?:status|:)?\s*(taken regularly|not taking regularly|taking regularly|not taken|taken)\b/i) ||
+      (/\b(?:taking|takes|taking regularly)\s+(?:the\s+)?(?:ifa|iron)\s+tablets?\b/i.test(lower) ? 'taking' : null);
+  const ifaTablets = numeric(/\b(\d{1,3})\s*(?:ifa|iron)\s*(?:tablets?|pills?|goli)/i) ??
+    numeric(/\b(?:ifa|iron)\s*(\d{1,3})\s*(?:tablets?|pills?|goli)/i);
   const isNewborn = /\b(newborn|new born|baby|infant|navjaat|ಹುಟ್ಟಿದ ಮಗು)\b/i.test(lower);
   const isMother = /\bmother\b/i.test(lower) && !isNewborn;
   const visitType: ExtractedVisitData['visitType'] =
@@ -524,10 +561,10 @@ export function extractWithMock(transcript: string, _lang = 'en-IN'): ExtractedV
     beneficiaryType,
     age,
     houseNo,
-    village: null,
+    village,
     visitType,
     pregnancyMonths,
-    gestationalWeeks: pregnancyMonths === null ? null : pregnancyMonths * 4,
+    gestationalWeeks: null,
     babyAgeDays,
     childAgeDays: babyAgeDays,
     weight,
@@ -558,7 +595,7 @@ async function attemptGeminiCall(
 ): Promise<ExtractedVisitData> {
   const response = await ai.models.generateContent({
     model,
-    contents: `Language code: ${language}\nTranscript: ${transcript}`,
+    contents: buildExtractionPrompt(transcript, language),
     config: {
       responseMimeType: 'application/json',
       responseJsonSchema,
@@ -626,6 +663,61 @@ export function validateExtraction(value: unknown, modelUsed = process.env.LLM_M
   const vaccinations = Array.isArray(parsed.vaccinationsGiven)
     ? parsed.vaccinationsGiven.filter((item): item is string => typeof item === 'string')
     : [];
+  const requiredEvidencePairs: Array<[unknown, string]> = [
+    [name, 'beneficiaryName'],
+    [numberOrNull('age'), 'age'],
+    [stringOrNull('houseNo'), 'houseNo'],
+    [stringOrNull('village'), 'village'],
+    [validVisitType, 'visitType'],
+    [numberOrNull('pregnancyMonths'), 'pregnancyMonths'],
+    [numberOrNull('gestationalWeeks'), 'gestationalWeeks'],
+    [numberOrNull('babyAgeDays'), 'babyAgeDays'],
+    [numberOrNull('weight'), 'weight'],
+    [numberOrNull('bpSystolic') !== null && numberOrNull('bpDiastolic') !== null ? 'present' : null, 'bloodPressure'],
+    [numberOrNull('hemoglobin'), 'hemoglobin'],
+    [stringOrNull('lastAncDate'), 'lastAncDate'],
+    [stringOrNull('ttStatus'), 'ttStatus'],
+    [stringOrNull('ttLastDoseDate'), 'ttLastDoseDate'],
+    [stringOrNull('ifaStatus'), 'ifaStatus'],
+    [numberOrNull('ifaTablets'), 'ifaTablets'],
+    [vaccinations.length ? vaccinations : null, 'vaccinations'],
+    [symptoms.length ? symptoms : null, 'symptoms'],
+    [typeof parsed.notes === 'string' && parsed.notes ? parsed.notes : null, 'notes'],
+  ];
+  if (requiredEvidencePairs.some(([fieldValue, evidenceKey]) => fieldValue !== null && !evidence[evidenceKey])) {
+    throw new InvalidExtractionError('Extraction is missing evidence for a populated field.');
+  }
+  const numericRanges: Record<string, [number, number]> = {
+    age: [1, 120],
+    pregnancyMonths: [1, 10],
+    gestationalWeeks: [1, 42],
+    babyAgeDays: [0, 3650],
+    weight: [0.1, 300],
+    bpSystolic: [20, 400],
+    bpDiastolic: [10, 300],
+    hemoglobin: [1, 30],
+    ifaTablets: [0, 1000],
+  };
+  for (const [field, [minimum, maximum]] of Object.entries(numericRanges)) {
+    const number = numberOrNull(field);
+    if (number !== null && (number < minimum || number > maximum)) {
+      throw new InvalidExtractionError(`Extraction contains an unsupported ${field} value.`);
+    }
+  }
+  if (
+    numberOrNull('bpSystolic') !== null &&
+    numberOrNull('bpDiastolic') !== null &&
+    Number(numberOrNull('bpSystolic')) <= Number(numberOrNull('bpDiastolic'))
+  ) {
+    throw new InvalidExtractionError('Extraction contains an inconsistent blood pressure.');
+  }
+  if (
+    [name, stringOrNull('houseNo'), stringOrNull('village'), stringOrNull('ttStatus'), stringOrNull('ifaStatus')]
+      .some((item) => item !== null && item.length > 200) ||
+    vaccinations.some((item) => item.trim().length > 80)
+  ) {
+    throw new InvalidExtractionError('Extraction contains text that exceeds the field limits.');
+  }
   const status = (present: boolean): 'high' | 'missing' => present ? 'high' : 'missing';
   const weight = numberOrNull('weight');
   const systolic = numberOrNull('bpSystolic');

@@ -153,7 +153,8 @@ export function evaluateDangerSigns(
   lang: string = 'hi-IN',
   beneficiaryName: string = 'Beneficiary',
   beneficiaryId: string = 'ID-Pending',
-  workerId: string = 'ASHA-001'
+  workerId: string = 'ASHA-001',
+  currentClarifications: Record<string, 'present' | 'absent'> = {}
 ): DangerEngineResult {
   const normLang = lang.split('-')[0].toLowerCase();
   const isFullyTested = ['hi', 'kn', 'en'].includes(normLang);
@@ -166,28 +167,71 @@ export function evaluateDangerSigns(
 
   // Temporal transitional positive: was absent before, active NOW -> FLAG
   const transPosRegex = /(pehle.*nahi.*ab|kal.*nahi.*aaj|nahi.*shuru|nahi (thi|tha|rahi|ittu).*ab|didn't have.*(now|started)|did not have.*(now|started)|no.*earlier.*now.*(started|active|bleeding)|irallilla.*ivaga (ide|aaguttide)|munche.*irallilla.*ivaga)/i;
-  // Temporal transitional negative: was present earlier, NOT present NOW -> CLEAR
-  const transNegRegex = /(pehle.*(thi|tha|hua tha).*ab (nahi|band|theek)|(had|was).*earlier.*now.*(no|none|not|stopped|cured)|earlier.*now.*stopped|(ittu|itthu).*ivaga (illa|nillide)|modalu.*ivaga illa|\b(bleeding|spotting|fever) stopped (yesterday|today|now)\b|\b(stopped|ended) yesterday\b)/i;
-  // Unknown: -> ASK
-  const unknownRegex = /(bataya nahi|pata nahi|did not mention|not reported)/i;
-  // Hedged / doubtful: -> ASK
-  const hedgeRegex = /(thoda.*jaisa|jaisa laga|doubtful|shakk hai|maybe|anusthide)/i;
-  // Present negation
-  const negRegex = /\b(nahi|bilkul nahi|no|not|none|illa|aguttilla|ledu|illai|nei|nathi)\b/i;
+  const transNegRegex = /(pehle.*(thi|tha|hua tha).*ab (nahi|band|theek)|(had|was).*earlier.*now.*(no|none|not|stopped|cured)|earlier.*now.*stopped|(ittu|itthu).*ivaga (illa|nillide)|modalu.*ivaga illa|\b(bleeding|spotting|fever) stopped (yesterday|today|now)\b|\b(stopped|ended) yesterday\b|\b(stopped|resolved|ended|cured)\b)/i;
+  const unknownRegex = /(bataya nahi|pata nahi|did not mention|not reported|unknown whether|unclear whether)/i;
+  const hedgeRegex = /(thoda.*jaisa|jaisa laga|doubtful|shakk hai|maybe|possibly|perhaps|anusthide)/i;
+  const negRegex = /\b(nahi|bilkul nahi|no|not|none|illa|aguttilla|ledu|illai|nei|nathi|denies|absent)\b/i;
+  const pastRegex = /\b(yesterday|last night|last week|earlier|previously|before|was|had)\b|kal|pehle|munche/i;
 
   for (const sign of DANGER_SIGNS_LIST) {
-    let matchedSyn: string | null = null;
-    for (const syn of sign.synonyms) {
-      if (t.includes(syn.toLowerCase())) {
-        matchedSyn = syn;
-        break;
+    const clarification = currentClarifications[sign.id];
+    if (clarification) {
+      if (clarification === 'present') {
+        flaggedSigns.push({
+          id: sign.id,
+          name: sign.name,
+          severity: sign.severity,
+          source: sign.source,
+          reason: 'worker_confirmed_current_symptom',
+        });
+        evidence.push({ signId: sign.id, name: sign.name, state: 'FLAG', reason: 'Worker explicitly confirmed this symptom is present now' });
+      } else {
+        evidence.push({ signId: sign.id, name: sign.name, state: 'CLEAR', reason: 'Worker explicitly confirmed this symptom is absent now' });
       }
+      continue;
     }
 
-    if (!matchedSyn) continue;
+    const matches: Array<{ synonym: string; start: number }> = [];
+    for (const syn of sign.synonyms) {
+      const lowerSynonym = syn.toLowerCase();
+      let start = t.indexOf(lowerSynonym);
+      while (start >= 0) {
+        matches.push({ synonym: lowerSynonym, start });
+        start = t.indexOf(lowerSynonym, start + lowerSynonym.length);
+      }
+    }
+    if (!matches.length) continue;
+    matches.sort((a, b) => a.start - b.start);
+    const states = matches.map(({ synonym, start }) => {
+      const end = start + synonym.length;
+      const delimiters = [',', ';', '.', '?', '!', ' and ', ' but ', ' however '];
+      let clauseStart = 0;
+      let clauseEnd = t.length;
+      for (const delimiter of delimiters) {
+        const before = t.lastIndexOf(delimiter, start);
+        if (before >= 0) clauseStart = Math.max(clauseStart, before + delimiter.length);
+        const afterDelimiter = t.indexOf(delimiter, end);
+        if (afterDelimiter >= 0) clauseEnd = Math.min(clauseEnd, afterDelimiter);
+      }
+      const context = t.slice(clauseStart, clauseEnd);
+      const after = t.slice(end, clauseEnd);
+      const isBuiltInNegativeSymptom = sign.id === 'newborn_not_feeding' || sign.id === 'reduced_fetal_movement';
+      if (transPosRegex.test(context)) return { state: 'FLAG', context };
+      if (unknownRegex.test(context)) return { state: 'ASK', context };
+      if (hedgeRegex.test(context)) return { state: 'ASK', context };
+      if (transNegRegex.test(context)) return { state: 'CLEAR', context };
+      if (pastRegex.test(context)) return { state: 'ASK', context };
+      if (!isBuiltInNegativeSymptom && negRegex.test(context)) return { state: 'CLEAR', context };
+      if (isBuiltInNegativeSymptom && /(?:no longer|not anymore|no more|stopped|resolved)/i.test(after)) {
+        return { state: 'CLEAR', context };
+      }
+      return { state: 'FLAG', context };
+    });
+    const positive = states.find((state) => state.state === 'FLAG');
+    const uncertain = states.find((state) => state.state === 'ASK');
+    const resolved = states.find((state) => state.state === 'CLEAR');
 
-    // Found match, evaluate context
-    if (transPosRegex.test(t)) {
+    if (positive) {
       flaggedSigns.push({
         id: sign.id,
         name: sign.name,
@@ -195,37 +239,18 @@ export function evaluateDangerSigns(
         source: sign.source,
         reason: 'transition_to_active_present',
       });
-      evidence.push({ signId: sign.id, name: sign.name, state: 'FLAG', reason: 'Transition to active present state' });
-    } else if (transNegRegex.test(t)) {
-      evidence.push({ signId: sign.id, name: sign.name, state: 'CLEAR', reason: 'Past episode resolved, currently absent' });
-    } else if (unknownRegex.test(t)) {
+      evidence.push({ signId: sign.id, name: sign.name, state: 'FLAG', reason: 'Current unnegated danger sign in symptom context' });
+    } else if (uncertain) {
       clarificationQuestions.push(`क्या लाभार्थी को ${sign.name} (खतरे का लक्षण) है? कृपया हाँ या ना बताएं।`);
-      evidence.push({ signId: sign.id, name: sign.name, state: 'ASK', reason: 'Status unknown / not reported' });
-    } else if (hedgeRegex.test(t)) {
-      clarificationQuestions.push(`क्या लाभार्थी को ${sign.name} (खतरे का लक्षण) की शिकायत अभी है? कृपया हाँ या ना कहें।`);
-      evidence.push({ signId: sign.id, name: sign.name, state: 'ASK', reason: 'Hedged / uncertain symptom' });
-    } else if (
-      (t.includes('not lethargic') || t.includes('sust nahi') || (sign.id !== 'newborn_not_feeding' && sign.id !== 'reduced_fetal_movement' && !t.includes('harkat nahi'))) &&
-      negRegex.test(t)
-    ) {
-      // Direct present negation verified (excluding refusal-to-feed and no-movement where "nahi" is the danger symptom)
-      evidence.push({ signId: sign.id, name: sign.name, state: 'CLEAR', reason: 'Direct present negation verified' });
-    } else {
-      // Unnegated danger sign detected -> Must FLAG!
-      flaggedSigns.push({
-        id: sign.id,
-        name: sign.name,
-        severity: sign.severity,
-        source: sign.source,
-        reason: 'unnegated_danger_sign_detected',
-      });
-      evidence.push({ signId: sign.id, name: sign.name, state: 'FLAG', reason: 'Unnegated danger term detected in speech' });
+      evidence.push({ signId: sign.id, name: sign.name, state: 'ASK', reason: 'Symptom status is uncertain, unreported, or only described in the past' });
+    } else if (resolved) {
+      evidence.push({ signId: sign.id, name: sign.name, state: 'CLEAR', reason: 'Symptom is negated or described as resolved in context' });
     }
   }
 
   if (flaggedSigns.length > 0) {
     const now = new Date().toISOString().replace('T', ' ').substring(0, 16);
-    const signsSummary = flaggedSigns.map((s) => `${s.name} (${s.source.document_title})`).join(', ');
+    const signsSummary = flaggedSigns.map((s) => s.name).join(', ');
     const referralSlip = `[URGENT PHC REFERRAL SLIP] Date/Time: ${now} | Worker ID: ${workerId} | Beneficiary: ${beneficiaryName} (ID: ${beneficiaryId}) | Danger Sign(s): ${signsSummary} | Immediate Action: Transfer to Primary Health Centre (PHC) for emergency clinical evaluation.`;
 
     return {

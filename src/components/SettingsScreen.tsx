@@ -12,7 +12,7 @@ interface SettingsScreenProps {
   onSelectTextSize: (size: 'normal' | 'large' | 'xl') => void;
   showJudgeView: boolean;
   onToggleJudgeView: () => void;
-  onPurgeData: () => void;
+  onPurgeData: () => Promise<boolean>;
 }
 
 const STOCK_VOICES = [
@@ -36,12 +36,19 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
 }) => {
   const [showPurgeConfirm, setShowPurgeConfirm] = useState(false);
   const [purgeDone, setPurgeDone] = useState(false);
+  const [purging, setPurging] = useState(false);
 
-  const handleConfirmPurge = () => {
-    onPurgeData();
-    setShowPurgeConfirm(false);
-    setPurgeDone(true);
-    setTimeout(() => setPurgeDone(false), 3000);
+  const handleConfirmPurge = async () => {
+    setPurging(true);
+    setPurgeDone(false);
+    try {
+      if (!await onPurgeData()) return;
+      setShowPurgeConfirm(false);
+      setPurgeDone(true);
+      setTimeout(() => setPurgeDone(false), 3000);
+    } finally {
+      setPurging(false);
+    }
   };
 
   return (
@@ -53,10 +60,10 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
           <span>Active Pipeline Architecture</span>
         </div>
         <div className="p-2.5 bg-teal-50/70 rounded-xl text-xs space-y-1 text-teal-950">
-          <div><span className="font-bold">STT:</span> Gnani Prisma v3.0 (streaming WebSocket)</div>
-          <div><span className="font-bold">TTS:</span> Gnani Timbre v3.0 (streaming WebSocket)</div>
-          <div><span className="font-bold">Extractor:</span> Gemini 3.8 Flash (strict RFC 8259 JSON)</div>
-          <div><span className="font-bold">Safety Rules:</span> Deterministic MoHFW Clinical Engine</div>
+          <div><span className="font-bold">STT:</span> Gnani Prisma v3.0 (streaming audio)</div>
+          <div><span className="font-bold">TTS:</span> Gnani Timbre v3.0 (generated audio playback)</div>
+          <div><span className="font-bold">Extractor:</span> Gemini → Groq → deterministic rules</div>
+          <div><span className="font-bold">Safety:</span> Independent danger-sign rules; references unverified</div>
         </div>
       </div>
 
@@ -114,9 +121,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
           <Mic2 className="w-5 h-5 text-teal-600" />
           <div>
             <h3 className="text-sm font-bold text-gray-900">Timbre v3.0 Stock Voice</h3>
-            <p className="text-xs text-gray-500">
-              Official Timbre v3.0 voices (every voice speaks all 10 languages)
-            </p>
+            <p className="text-xs text-gray-500">Choose the voice used for generated speech responses.</p>
           </div>
         </div>
 
@@ -194,16 +199,16 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
         </button>
       </div>
 
-      {/* Responsible AI Post-Judging Purge */}
+      {/* Register data deletion */}
       <div className="p-4 bg-red-50/70 border border-red-200 rounded-2xl space-y-3">
         <div className="flex items-start gap-2.5">
           <div className="p-2 rounded-xl bg-red-100 text-red-700 shrink-0">
             <ShieldCheck className="w-5 h-5" />
           </div>
           <div>
-            <h3 className="text-sm font-bold text-red-950">Responsible AI Compliance Purge</h3>
+            <h3 className="text-sm font-bold text-red-950">Delete Register Data</h3>
             <p className="text-xs text-red-800 leading-snug">
-              Securely deletes all stored transcripts, cached audio, and patient records after judging.
+              Permanently deletes all saved beneficiaries and visit records from this server. This cannot be undone.
             </p>
           </div>
         </div>
@@ -211,7 +216,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
         {purgeDone && (
           <div className="p-2.5 bg-emerald-100 text-emerald-900 rounded-xl text-xs font-bold flex items-center gap-2">
             <Check className="w-4 h-4 text-emerald-700" />
-            All local health data and transcripts successfully purged!
+            Saved beneficiaries and visit records were deleted from the server.
           </div>
         )}
 
@@ -232,9 +237,10 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
             <div className="flex gap-2">
               <button
                 onClick={handleConfirmPurge}
+                disabled={purging}
                 className="flex-1 py-1.5 rounded-lg bg-red-600 text-white font-bold text-xs hover:bg-red-700 transition"
               >
-                Yes, Purge Now
+                {purging ? 'Deleting…' : 'Delete now'}
               </button>
               <button
                 onClick={() => setShowPurgeConfirm(false)}

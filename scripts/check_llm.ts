@@ -3,6 +3,7 @@ import '../server/env.ts';
 import { GoogleGenAI } from '@google/genai';
 import { extractWithGroq, LlmProviderError, selectedGroqModel } from '../server/groq.ts';
 import { responseJsonSchema, validateExtraction } from '../server/extractor.ts';
+import { buildExtractionPrompt } from '../server/extractionPrompt.ts';
 
 const probeTranscript = 'Synthetic test visit: Kumari, age 24, seven months pregnant, house 15, weight 58 kg, BP 110 by 70, no bleeding.';
 
@@ -10,9 +11,11 @@ function safeStatus(error: unknown): string {
   if (error instanceof LlmProviderError) return error.status;
   if (!error || typeof error !== 'object') return 'ERROR';
   const candidate = error as { status?: unknown; code?: unknown; message?: unknown };
-  const status = Number(candidate.status ?? candidate.code);
-  if (status > 0) return String(status);
-  if (/timed?\s*out|timeout|aborted/i.test(String(candidate.message || ''))) return 'TIMEOUT';
+  const status = Number(candidate.status);
+  if (Number.isInteger(status) && status >= 100 && status <= 599) return String(status);
+  if (/timed?\s*out|timeout|aborted/i.test(`${String(candidate.code || '')} ${String(candidate.message || '')}`)) {
+    return 'TIMEOUT';
+  }
   return 'ERROR';
 }
 
@@ -41,7 +44,7 @@ async function checkGemini() {
     });
     const result = await ai.models.generateContent({
       model,
-      contents: `Language code: en-IN\nTranscript: ${probeTranscript}`,
+      contents: buildExtractionPrompt(probeTranscript, 'en-IN'),
       config: {
         responseMimeType: 'application/json',
         responseJsonSchema,

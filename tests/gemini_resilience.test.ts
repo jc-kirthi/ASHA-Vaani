@@ -10,6 +10,7 @@ process.env.ASHA_BENEFICIARIES_FILE = path.join(os.tmpdir(), `llm-fallback-${pro
 await fs.rm(process.env.ASHA_BENEFICIARIES_FILE, { force: true });
 
 const {
+  extractWithMock,
   extractWithFallback,
   resetExtractionProviderState,
   validateExtraction,
@@ -18,7 +19,7 @@ const { LlmProviderError, extractWithGroq, resetGroqModelCatalog } = await impor
 const { createHealthResponse } = await import('../server/health.ts');
 const { processTurn, resetTurnSessions } = await import('../server/turn.ts');
 
-const transcript = 'Kumari, 24 years old, seven months pregnant, house 15, weight 58 kilo, BP 110 by 70, no bleeding';
+const transcript = 'Kumari, 24 years old, seven months pregnant for ANC, house 15, weight 58 kilo, BP 110 by 70, no bleeding';
 const validJson = {
   beneficiaryName: 'Kumari',
   beneficiaryNames: ['Kumari'],
@@ -28,7 +29,7 @@ const validJson = {
   village: null,
   visitType: 'ANC',
   pregnancyMonths: 7,
-  gestationalWeeks: 28,
+  gestationalWeeks: null,
   babyAgeDays: null,
   weight: 58,
   bpSystolic: 110,
@@ -46,15 +47,58 @@ const validJson = {
     beneficiaryName: 'Kumari',
     age: '24 years old',
     houseNo: 'house 15',
+    village: null,
+    visitType: 'ANC',
+    pregnancyMonths: 'seven months pregnant',
+    gestationalWeeks: null,
+    babyAgeDays: null,
     weight: 'weight 58 kilo',
     bloodPressure: 'BP 110 by 70',
+    hemoglobin: null,
+    lastAncDate: null,
+    ttStatus: null,
+    ttLastDoseDate: null,
     ifaStatus: null,
+    ifaTablets: null,
+    vaccinations: null,
+    symptoms: 'no bleeding',
+    notes: null,
   },
 };
 
 function extraction(model = 'mock') {
   return validateExtraction(validJson, model);
 }
+
+assert.throws(
+  () => validateExtraction({ ...validJson, weight: 301 }, 'invalid-range-test'),
+  /unsupported weight value/
+);
+assert.throws(
+  () => validateExtraction({
+    ...validJson,
+    evidence: { ...validJson.evidence, weight: null },
+  }, 'missing-evidence-test'),
+  /missing evidence/
+);
+console.log('PASS Extraction validation rejects unsupported values and unsupported field claims');
+
+const spokenVisit = extractWithMock(
+  'Visited Lakshmi today. She is 25 years old, seven months pregnant, lives in house number 24 in Rampur. Her weight is 55 kilograms, blood pressure is 120 by 80, haemoglobin is 10.5, she is taking IFA tablets, she has received two TT doses, and her last ANC visit was on October 20.'
+);
+assert.equal(spokenVisit.beneficiaryName, 'Lakshmi');
+assert.equal(spokenVisit.beneficiaryNames.length, 1);
+assert.equal(spokenVisit.houseNo, '24');
+assert.equal(spokenVisit.village, 'Rampur');
+assert.equal(spokenVisit.age, 25);
+assert.equal(spokenVisit.pregnancyMonths, 7);
+assert.equal(spokenVisit.weight, 55);
+assert.equal(spokenVisit.bpSystolic, 120);
+assert.equal(spokenVisit.bpDiastolic, 80);
+assert.equal(spokenVisit.hemoglobin, 10.5);
+assert.equal(spokenVisit.ifaStatus, 'taking');
+assert.equal(spokenVisit.ttStatus, 'two TT doses');
+console.log('PASS Deterministic fallback extracts supported fields from natural visit narration');
 
 function providers(
   gemini: (transcript: string, language: string, signal: AbortSignal) => Promise<ReturnType<typeof extraction>>,

@@ -11,7 +11,7 @@ ASHA Vaani is a voice-register prototype. Finalized transcripts are sent through
 npm run dev
 ```
 
-Starts the unified backend and frontend on port 3000 (`http://0.0.0.0:3000`), serving both the responsive web application and live WebSocket proxies for Gnani Prisma STT and Timbre TTS.
+Starts the unified backend and frontend on port 3000 (`http://localhost:3000`). Gnani Prisma STT uses a live WebSocket proxy; Timbre TTS currently returns a complete audio response for playback rather than streaming audio to the browser.
 
 To check the configured backend health:
 ```bash
@@ -28,8 +28,9 @@ To run the application tests and clinical evaluation:
 npm run lint
 npm run test:llm
 npm run test:turn
-python3 tests/test_all.py
-python3 scripts/eval.py
+npm run test:workflow
+python tests/test_all.py
+python scripts/eval.py
 ```
 
 ---
@@ -44,15 +45,7 @@ Keep one local `.env` file in the project root and set values there. Never commi
 - `FALLBACK_API_KEY`: Groq API key. Optional, but required to use the Groq fallback.
 - `FALLBACK_BASE_URL`: Groq-compatible API base URL, typically `https://api.groq.com/openai/v1`.
 - `FALLBACK_MODEL`: Active Groq chat model identifier. Set it explicitly; `npm run check:llm` can check the model against the provider account.
-- `ENCRYPTION_KEY`: 32-byte secret key used for AES-256-GCM authenticated encryption of sensitive beneficiary health records at rest.
-
-Example local provider settings (put real keys only in the ignored `.env` file):
-
-```env
-LLM_MODEL=gemini-3.8-flash
-FALLBACK_BASE_URL=https://api.groq.com/openai/v1
-FALLBACK_MODEL=llama-3.3-70b-versatile
-```
+- `ENCRYPTION_KEY`: High-entropy secret used to derive the AES-256-GCM key for saved visit records. Keep it stable and backed up; losing or changing it makes existing records unreadable.
 
 `/api/health` reports key-presence booleans, service-check results, and the port; it never returns key values. `npm run check:llm` sends a small synthetic extraction request and prints provider status, model, and latency. It does not modify visit data.
 
@@ -69,10 +62,13 @@ Browser Mic (16kHz PCM)
   --> Groq fallback if Gemini is unavailable
   --> Existing deterministic rule-based extractor if both providers fail
   --> Separate deterministic danger-sign engine (FLAG / CLEAR / ASK)
-  --> Gnani Timbre v3.0 speech response and encrypted visit storage
+  --> Read-back and worker confirmation
+  --> Encrypted server-side visit register and follow-up tasks
 ```
 
 The LLM providers receive only the current transcript, selected language, and the shared extraction schema. They extract fields only; danger decisions are made by the deterministic engine. HTTP 429/503 responses open that provider's circuit for at least 60 seconds; invalid structured output is retried once before switching providers. Other errors are not retried, and provider attempts are time-limited to keep the live turn responsive. Extracted values are validated before they reach the turn pipeline.
+
+The active visit session is kept by the backend and all field edits go through `/api/turn`. Saved visits are encrypted with AES-256-GCM and stored in the ignored `data/visit_records.json`; beneficiaries are stored in the server-side JSON register, which starts without a seeded/demo roster. The beneficiary JSON is not encrypted, so protect the server disk and do not treat this prototype as a production shared database. The browser does not act as a shared visit-record database. Follow-up dates are calculated from the saved visit date and available age/week data. A date is marked pending verification if the required information is absent. Current follow-up rules and draft clinical-reference metadata are unverified and must not be treated as official guidance.
 
 When `FALLBACK_MODEL` is set, the provider adapter verifies that it is available from the configured provider's `/models` response before using it. If it is unset, automatic selection looks for a model identifier containing `instant` and excludes reasoning-model identifiers (and models explicitly marked inactive). The provider model-list API does not expose a measured latency guarantee.
 
@@ -85,9 +81,9 @@ When `FALLBACK_MODEL` is set, the provider adapter verifies that it is available
 
 ---
 
-## 5. Danger-Sign MoHFW Citation TODOs
+## 5. Unverified Danger-Sign Reference Metadata
 
-The following citation entries are draft TODOs, not verified references. Verify each against current official Ministry of Health and Family Welfare (MoHFW) / National Health Mission (NHM) documents before operational use:
+The following citation entries are draft TODOs, not verified references. The UI explicitly labels them as unverified and does not present them as citations. Verify each against current official Ministry of Health and Family Welfare (MoHFW) / National Health Mission (NHM) documents before operational use:
 
 1. `vaginal_bleeding`: `[TODO: Verify MoHFW ASHA Training Module 6 - Maternal Health, Section 3.2, Page 28]`
 2. `convulsions_fits`: `[TODO: Verify MoHFW ASHA Training Module 6 - High Risk Pregnancy, Section 4.1, Page 34]`
@@ -109,5 +105,6 @@ The following citation entries are draft TODOs, not verified references. Verify 
 1. **Active Connectivity for Live Voice**: Real-time streaming via Gnani Prisma v3.0 and Timbre v3.0 requires an active internet connection (broadband or 4G).
 2. **Audio Hardware**: Browser microphone access requires HTTPS or `localhost` context with user permission.
 3. **LLM availability**: Live extraction requires an available Gemini model. Groq fallback requires its own key, base URL, and an available model. When both providers fail, the existing rule-based extractor is used; if it extracts no fields, the transcript is retained and the user is asked to repeat it.
-4. **Provider verification**: The current `.env` does not specify `LLM_MODEL`, and no Groq key/model is configured. The last `npm run check:llm` therefore reported both providers as `NOT_CONFIGURED`; configure the models and keys locally, then rerun the check. No live Groq extraction or exact Groq model is claimed.
-5. **Medical disclaimer**: This prototype does not replace clinical judgment or emergency medical services. Danger-sign source references above remain draft items for human verification.
+4. **Storage deployment scope**: JSON files are persistent on one server instance but are not a concurrent multi-instance database. The current prototype also has no worker sign-in/authorization layer; deploy only in a controlled environment until those are added.
+5. **Encryption key continuity**: Saved visit records cannot be decrypted if `ENCRYPTION_KEY` is lost or changed. Restore the original key from a secure backup; the application rejects unreadable records rather than silently discarding them.
+6. **Clinical verification**: Follow-up timing rules and draft danger-sign references are not verified official guidance. This application does not replace clinical judgment or emergency medical services.

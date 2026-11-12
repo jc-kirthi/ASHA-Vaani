@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useCallback, useRef, useEffect } from 'react';
+import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import {
   UserCheck,
   Scale,
@@ -11,7 +11,6 @@ import {
   Pill,
   Syringe,
   Save,
-  RotateCcw,
   Calendar,
   AlertTriangle,
   RefreshCw,
@@ -27,14 +26,14 @@ import {
   JudgeLogEvent,
   BeneficiaryRecord,
   FollowupItem,
+  DangerSignAlert,
 } from './types';
 
 import { LANGUAGE_CATALOG } from './data/languageData';
-import { SYNTHETIC_ROSTER } from './data/rosterData';
 import { DangerEngineResult } from './types';
 
-import { useAudioRecorder, STTErrorState } from './hooks/useAudioRecorder';
-import { useSpeechPlayer, TTSErrorState } from './hooks/useSpeechPlayer';
+import { useAudioRecorder } from './hooks/useAudioRecorder';
+import { useSpeechPlayer } from './hooks/useSpeechPlayer';
 
 import { Header } from './components/Header';
 import { StepTracker } from './components/StepTracker';
@@ -46,43 +45,16 @@ import { DangerBanner } from './components/DangerBanner';
 import { DisambiguationModal } from './components/DisambiguationModal';
 import { FollowupSummary } from './components/FollowupSummary';
 import { JudgeView } from './components/JudgeView';
-import { DemoScenariosModal, DemoScenario } from './components/DemoScenariosModal';
 import { RecordsScreen } from './components/RecordsScreen';
 import { SettingsScreen } from './components/SettingsScreen';
 import { OnboardingHints } from './components/OnboardingHints';
-
-const INITIAL_FORM_DATA: VisitFormData = {
-  beneficiaryName: null,
-  beneficiaryId: null,
-  houseNo: null,
-  village: null,
-  visitType: null,
-  gestationalWeeks: null,
-  childAgeDays: null,
-  weight: null,
-  weightRaw: null,
-  bpSystolic: null,
-  bpDiastolic: null,
-  ifaTablets: null,
-  ifaStatus: null,
-  vaccinationsGiven: [],
-  vaccinationsDue: [],
-  lastAncDate: null,
-  fieldStates: {
-    beneficiary: 'missing',
-    visitType: 'missing',
-    weight: 'missing',
-    bp: 'missing',
-    ifa: 'missing',
-    vaccinations: 'confirmed',
-  },
-  evidenceTrail: {},
-};
 
 interface PipelineField {
   value: unknown;
   state: 'confirmed' | 'uncertain' | 'missing';
   evidence: string;
+  detector?: 'LLM' | 'rule_engine' | 'number_normalizer' | 'manual_edit';
+  previousValues?: Array<{ value: unknown; timestamp: string; evidence: string }>;
 }
 
 interface PipelineTurnResponse {
@@ -101,6 +73,7 @@ interface PipelineTurnResponse {
   saved_record: Record<string, unknown> | null;
   test_mode: boolean;
   roster_label: string | null;
+  duplicate_candidates: BeneficiaryRecord[];
   rule: string;
   llm_status: 'ready' | 'retried' | 'busy';
   extraction_status: {
@@ -111,6 +84,109 @@ interface PipelineTurnResponse {
     totalLatencyMs: number;
     llmCalls: number;
   } | null;
+}
+
+function formDataFromPipeline(fields: Record<string, PipelineField>): VisitFormData {
+  const value = (key: string) => fields[key]?.value;
+  const number = (key: string): number | null => typeof value(key) === 'number' ? value(key) as number : null;
+  const text = (key: string): string | null => typeof value(key) === 'string' ? value(key) as string : null;
+  const state = (key: string): 'confirmed' | 'uncertain' | 'missing' => fields[key]?.state || 'missing';
+  const evidence = (key: string) => {
+    const item = fields[key];
+    if (!item) return undefined;
+    return {
+      value: item.value,
+      sourceText: item.evidence,
+      detector: item.detector || 'rule_engine',
+      timestamp: new Date().toLocaleTimeString(),
+      previousValues: item.previousValues?.map((previous) => ({
+        value: previous.value,
+        timestamp: previous.timestamp,
+        reason: previous.evidence,
+      })),
+    };
+  };
+  const vaccinations = value('vaccinationsGiven');
+  const due = value('vaccinationsDue');
+  const systolic = number('bpSystolic');
+  const diastolic = number('bpDiastolic');
+  const pregnancyWeeks = number('gestationalWeeks');
+
+  return {
+    beneficiaryName: text('name'),
+    beneficiaryId: text('beneficiaryId'),
+    houseNo: text('houseNo'),
+    village: text('village'),
+    visitType: ['ANC', 'PNC', 'immunisation'].includes(String(value('visitType')))
+      ? value('visitType') as VisitFormData['visitType'] : null,
+    gestationalWeeks: pregnancyWeeks,
+    childAgeDays: number('babyAgeDays'),
+    weight: number('weight'),
+    weightRaw: fields.weight?.evidence || null,
+    bpSystolic: systolic,
+    bpDiastolic: diastolic,
+    ifaTablets: number('ifaTablets'),
+    ifaStatus: text('ifaStatus'),
+    vaccinationsGiven: Array.isArray(vaccinations) ? vaccinations as string[] : [],
+    vaccinationsDue: Array.isArray(due) ? due as string[] : [],
+    lastAncDate: text('lastAncDate'),
+    fieldStates: {
+      beneficiary: state('name'),
+      visitType: state('visitType'),
+      weight: state('weight'),
+      bp: state('bpSystolic') === 'uncertain' || state('bpDiastolic') === 'uncertain'
+        ? 'uncertain'
+        : systolic !== null && diastolic !== null ? 'confirmed' : 'missing',
+      ifa: state('ifaStatus'),
+      vaccinations: state('vaccinationsGiven'),
+    },
+    evidenceTrail: {
+      beneficiary: evidence('name'),
+      visitType: evidence('visitType'),
+      weight: evidence('weight'),
+      bp: evidence('bpSystolic'),
+      ifa: evidence('ifaStatus'),
+      vaccinations: evidence('vaccinationsGiven'),
+    },
+  };
+}
+
+function toSavedVisitRecord(record: Record<string, unknown>): SavedVisitRecord {
+  const followups = Array.isArray(record.followups) ? record.followups as FollowupItem[] : [];
+  const number = (key: string) => typeof record[key] === 'number' ? record[key] as number : null;
+  const text = (key: string) => typeof record[key] === 'string' ? record[key] as string : null;
+  return {
+    id: String(record.id),
+    timestamp: String(record.timestamp || ''),
+    beneficiaryName: String(record.beneficiaryName || ''),
+    beneficiaryId: String(record.beneficiaryId || ''),
+    village: String(record.village || ''),
+    houseNo: String(record.houseNo || ''),
+    visitType: String(record.visitType || ''),
+    visitDate: text('visitDate') || undefined,
+    age: number('age'),
+    pregnancyMonths: number('pregnancyMonths'),
+    gestationalWeeks: number('gestationalWeeks'),
+    babyAgeDays: number('babyAgeDays'),
+    weight: number('weight'),
+    bp: typeof record.bp === 'string' ? record.bp : null,
+    hemoglobin: number('hemoglobin'),
+    ifaStatus: text('ifaStatus'),
+    ifaTablets: number('ifaTablets'),
+    lastAncDate: text('lastAncDate'),
+    ttStatus: text('ttStatus'),
+    ttLastDoseDate: text('ttLastDoseDate'),
+    vaccinationsGiven: Array.isArray(record.vaccinationsGiven)
+      ? record.vaccinationsGiven.filter((value): value is string => typeof value === 'string')
+      : [],
+    symptoms: Array.isArray(record.symptoms) ? record.symptoms as Array<Record<string, unknown>> : [],
+    notes: text('notes'),
+    isFlagged: record.isFlagged === true,
+    flaggedSigns: Array.isArray(record.flaggedSigns) ? record.flaggedSigns as DangerSignAlert[] : [],
+    referralSlip: typeof record.referralSlip === 'string' ? record.referralSlip : undefined,
+    transcript: String(record.transcript || ''),
+    followups,
+  };
 }
 
 export default function App() {
@@ -134,12 +210,10 @@ export default function App() {
   });
   const [textSize, setTextSize] = useState<'normal' | 'large' | 'xl'>('normal');
   const [showJudgeView, setShowJudgeView] = useState<boolean>(false);
-  const [showDemoModal, setShowDemoModal] = useState<boolean>(false);
   const [serverTestMode, setServerTestMode] = useState(false);
 
   // Visit State
   const [stepState, setStepState] = useState<StepState>('listening');
-  const [formData, setFormData] = useState<VisitFormData>(INITIAL_FORM_DATA);
   const [dangerResult, setDangerResult] = useState<DangerEngineResult | null>(null);
   const [transcript, setTranscript] = useState<string>('');
   const [extractedJson, setExtractedJson] = useState<any>(null);
@@ -167,50 +241,34 @@ export default function App() {
   });
   const [newBeneficiaries, setNewBeneficiaries] = useState<BeneficiaryRecord[]>([]);
   const [pipelineFields, setPipelineFields] = useState<Record<string, PipelineField>>({});
+  const [beneficiarySearch, setBeneficiarySearch] = useState('');
+  const [savedRecordId, setSavedRecordId] = useState<string | null>(null);
+  const [readyToConfirm, setReadyToConfirm] = useState(false);
   const [selectedPipelineField, setSelectedPipelineField] = useState<{ key: string; label: string } | null>(null);
   const pipelineSessionIdRef = useRef(`visit-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   const [workflowError, setWorkflowError] = useState<{ message: string; canRetry: boolean } | null>(null);
   const stopRecordingRef = useRef<() => void>(() => {});
   const lastProcessedTranscriptRef = useRef('');
-  const visitTranscriptRef = useRef('');
   const awaitingSaveConfirmationRef = useRef(false);
 
   useEffect(() => {
     let active = true;
-    const restoreEncryptedRecords = async () => {
-      try {
-        const stored = JSON.parse(localStorage.getItem('asha_saved_records') || '[]');
-        if (!Array.isArray(stored) || stored.length === 0) return;
-        const records = await Promise.all(stored.map(async (item) => {
-          if (!item || typeof item.encryptedToken !== 'string') return null;
-          const response = await fetch('/api/records/decrypt', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ token: item.encryptedToken }),
-          });
-          if (!response.ok) throw new Error('A saved encrypted record could not be decrypted.');
-          const result = await response.json();
-          return result.data as SavedVisitRecord;
-        }));
-        const validRecords = records.filter((record): record is SavedVisitRecord => record !== null);
-        localStorage.setItem(
-          'asha_saved_records',
-          JSON.stringify(validRecords.map((record) => ({
-            id: record.id,
-            timestamp: record.timestamp,
-            encryptedToken: record.encryptedToken,
-          })))
-        );
-        if (active) setSavedRecords(validRecords);
-      } catch {
-        localStorage.removeItem('asha_saved_records');
+    void fetch('/api/records')
+      .then(async (response) => {
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Saved visits could not be loaded.');
+        return data as Array<Record<string, unknown>>;
+      })
+      .then((records) => {
+        if (!active) return;
+        setSavedRecords(records.map(toSavedVisitRecord));
+      })
+      .catch((error) => {
         if (active) setWorkflowError({
-          message: 'Saved records could not be decrypted. The local copies were removed; check ENCRYPTION_KEY in the project root .env file.',
+          message: error instanceof Error ? error.message : 'Saved visits could not be loaded.',
           canRetry: true,
         });
-      }
-    };
-    void restoreEncryptedRecords();
+      });
     return () => {
       active = false;
     };
@@ -220,7 +278,7 @@ export default function App() {
     let active = true;
     void fetch('/api/beneficiaries')
       .then(async (response) => {
-        if (!response.ok) throw new Error('Synthetic beneficiaries could not be loaded.');
+        if (!response.ok) throw new Error('Beneficiaries could not be loaded.');
         return response.json();
       })
       .then((beneficiaries: BeneficiaryRecord[]) => {
@@ -228,7 +286,7 @@ export default function App() {
       })
       .catch(() => {
         if (active) setWorkflowError({
-          message: 'Synthetic beneficiaries could not be loaded. Retry after checking the backend.',
+          message: 'Beneficiaries could not be loaded. Retry after checking the backend.',
           canRetry: true,
         });
       });
@@ -249,6 +307,8 @@ export default function App() {
     port: 3000,
   });
   const [healthAvailable, setHealthAvailable] = useState(false);
+
+  const formData = useMemo(() => formDataFromPipeline(pipelineFields), [pipelineFields]);
 
   const refreshHealth = useCallback(async () => {
     try {
@@ -324,55 +384,42 @@ export default function App() {
     ]);
   }, []);
 
-  const createSyntheticBeneficiary = useCallback((
+  const createBeneficiary = useCallback(async (
     name: string,
     houseNo: string,
     category: 'ANC' | 'PNC',
-    age = 0,
-    village = 'Rampur'
-  ) => {
-    const existing = [...SYNTHETIC_ROSTER, ...newBeneficiaries].find(
+    village: string,
+    age: number | null = null
+  ): Promise<boolean> => {
+    const existing = newBeneficiaries.find(
       (beneficiary) =>
         beneficiary.name.toLocaleLowerCase() === name.toLocaleLowerCase() &&
-        beneficiary.house_no === houseNo
+        beneficiary.house_no === houseNo &&
+        beneficiary.village.toLocaleLowerCase() === village.toLocaleLowerCase()
     );
-    if (existing) return existing;
-    const created: BeneficiaryRecord = {
-      id: `NEW-${Date.now()}`,
-      name,
-      house_no: houseNo || 'Unknown',
-      village: village || 'Rampur',
-      category,
-      age,
-      isNew: true,
-    };
-    setNewBeneficiaries((previous) => [...previous, created]);
-    void fetch('/api/beneficiaries', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name: created.name,
-        house_no: created.house_no,
-        village: created.village,
-        category: created.category,
-        age: created.age,
-      }),
-    })
-      .then(async (response) => {
-        const saved = await response.json();
-        if (!response.ok) throw new Error(saved.error || 'Could not save synthetic beneficiary.');
-        setNewBeneficiaries((previous) => previous.map((item) => item.id === created.id ? saved : item));
-      })
-      .catch((error) => {
-        setWorkflowError({
-          message: error instanceof Error ? error.message : 'Could not save synthetic beneficiary.',
-          canRetry: true,
-        });
+    if (existing) return true;
+    try {
+      const response = await fetch('/api/beneficiaries', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, house_no: houseNo, village, category, age }),
       });
-    return created;
+      const saved = await response.json();
+      if (!response.ok) throw new Error(saved.error || 'Could not save beneficiary.');
+      setNewBeneficiaries((previous) =>
+        previous.some((item) => item.id === saved.id) ? previous : [...previous, saved]
+      );
+      setWorkflowError(null);
+      return true;
+    } catch (error) {
+      setWorkflowError({
+        message: error instanceof Error ? error.message : 'Could not save beneficiary.',
+        canRetry: true,
+      });
+      return false;
+    }
   }, [newBeneficiaries]);
   const startRecordingRef = useRef<(lang: string) => Promise<void>>(async () => {});
-  const saveRecordRef = useRef<() => Promise<void>>(async () => {});
 
   // Process completed spoken text
   const processUtterance = useCallback(
@@ -380,6 +427,7 @@ export default function App() {
       const pipelineStarted = performance.now();
       const pipelineUtterance = spokenText.trim();
       if (!pipelineUtterance) return;
+      setReadyToConfirm(false);
       if (isPlaying && /^(no|nahi|illi|galat|correction)\b/i.test(pipelineUtterance)) {
         stopAudio();
       }
@@ -397,7 +445,6 @@ export default function App() {
         const result = await response.json() as PipelineTurnResponse & { error?: string };
         if (!response.ok) throw new Error(result.error || 'Visit pipeline failed.');
 
-        visitTranscriptRef.current = result.transcript;
         setTranscript(result.transcript);
         setPipelineFields(result.fields);
         setExtractedJson({
@@ -408,6 +455,7 @@ export default function App() {
         setDangerResult(result.danger);
         setActiveQuestion(result.questions[0] || null);
         awaitingSaveConfirmationRef.current = Boolean(result.read_back_text);
+        setReadyToConfirm(Boolean(result.read_back_text) && !result.saved);
         setTurnLatencyMs(Math.round(performance.now() - pipelineStarted));
         setStepState(result.saved ? 'saved' : result.questions.length ? 'confirm' : 'checking');
         addJudgeLog('TURN_PIPELINE', result.rule, {
@@ -430,85 +478,21 @@ export default function App() {
           });
         }
 
-        const field = (name: string) => result.fields[name];
-        const value = (name: string) => field(name)?.value;
-        const evidence = (name: string) => {
-          const item = field(name);
-          if (!item) return undefined;
-          return {
-            value: item.value,
-            sourceText: item.evidence,
-            detector: 'LLM' as const,
-            timestamp: new Date().toLocaleTimeString(),
-          };
-        };
-        setFormData((previous) => ({
-          ...previous,
-          beneficiaryName: typeof value('name') === 'string' ? value('name') as string : previous.beneficiaryName,
-          beneficiaryId: typeof result.saved_record?.beneficiaryId === 'string'
-            ? String(result.saved_record.beneficiaryId)
-            : previous.beneficiaryId,
-          houseNo: typeof value('houseNo') === 'string' ? value('houseNo') as string : previous.houseNo,
-          visitType: ['ANC', 'PNC', 'immunisation'].includes(String(value('visitType')))
-            ? value('visitType') as VisitFormData['visitType'] : previous.visitType,
-          weight: typeof value('weight') === 'number' ? value('weight') as number : previous.weight,
-          bpSystolic: typeof value('bpSystolic') === 'number' ? value('bpSystolic') as number : previous.bpSystolic,
-          bpDiastolic: typeof value('bpDiastolic') === 'number' ? value('bpDiastolic') as number : previous.bpDiastolic,
-          ifaStatus: typeof value('ifaStatus') === 'string' ? value('ifaStatus') as string : previous.ifaStatus,
-          lastAncDate: typeof value('lastAncDate') === 'string' ? value('lastAncDate') as string : previous.lastAncDate,
-          gestationalWeeks: typeof value('pregnancyMonths') === 'number'
-            ? (value('pregnancyMonths') as number) * 4 : previous.gestationalWeeks,
-          childAgeDays: typeof value('babyAgeDays') === 'number' ? value('babyAgeDays') as number : previous.childAgeDays,
-          vaccinationsGiven: Array.isArray(value('vaccinationsGiven'))
-            ? value('vaccinationsGiven') as string[] : previous.vaccinationsGiven,
-          fieldStates: {
-            beneficiary: field('name')?.state || previous.fieldStates.beneficiary,
-            visitType: field('visitType')?.state || previous.fieldStates.visitType,
-            weight: field('weight')?.state || previous.fieldStates.weight,
-            bp: field('bpSystolic')?.state === 'uncertain' || field('bpDiastolic')?.state === 'uncertain'
-              ? 'uncertain'
-              : value('bpSystolic') !== null && value('bpDiastolic') !== null
-                ? 'confirmed' : 'missing',
-            ifa: field('ifaStatus')?.state || previous.fieldStates.ifa,
-            vaccinations: field('vaccinationsGiven')?.state || 'missing',
-          },
-          evidenceTrail: {
-            beneficiary: evidence('name'),
-            weight: evidence('weight'),
-            bp: evidence('bpSystolic'),
-            ifa: evidence('ifaStatus'),
-          },
-        }));
-
         if (result.roster_label) {
           const rosterResponse = await fetch('/api/beneficiaries');
           if (rosterResponse.ok) setNewBeneficiaries(await rosterResponse.json());
         }
+        if (result.duplicate_candidates.length) {
+          setDisambiguationState({
+            isOpen: true,
+            promptText: result.questions[0] || 'Select the beneficiary for this visit.',
+            candidates: result.duplicate_candidates,
+          });
+        }
         if (result.saved && result.saved_record) {
-          const record = result.saved_record;
-          const savedVisit: SavedVisitRecord = {
-            id: String(record.id || `REC-${Date.now()}`),
-            timestamp: String(record.timestamp || new Date().toISOString()),
-            beneficiaryName: String(record.beneficiaryName || value('name') || 'Unknown'),
-            beneficiaryId: String(record.beneficiaryId || value('name') || 'Unknown'),
-            village: String(record.village || 'Rampur'),
-            houseNo: String(record.houseNo || value('houseNo') || 'Unknown'),
-            visitType: String(record.visitType || value('visitType') || 'ANC'),
-            weight: typeof record.weight === 'number' ? record.weight : null,
-            bp: typeof record.bp === 'string' ? record.bp : null,
-            isFlagged: record.isFlagged === true,
-            flaggedSigns: result.danger.flaggedSigns,
-            referralSlip: result.referral_slip || undefined,
-            encryptedToken: result.encrypted_record || undefined,
-            transcript: result.transcript,
-            followups: result.followups,
-          };
+          const savedVisit = toSavedVisitRecord(result.saved_record);
+          setSavedRecordId(savedVisit.id);
           setSavedRecords((previous) => [savedVisit, ...previous.filter((item) => item.id !== savedVisit.id)]);
-          const stored = JSON.parse(localStorage.getItem('asha_saved_records') || '[]');
-          localStorage.setItem('asha_saved_records', JSON.stringify([
-            { id: savedVisit.id, timestamp: savedVisit.timestamp, encryptedToken: result.encrypted_record },
-            ...(Array.isArray(stored) ? stored : []),
-          ]));
           setSavedFollowups(result.followups);
         }
 
@@ -517,9 +501,8 @@ export default function App() {
           const spokenText = result.saved && result.followups.length
             ? `${responseText} ${result.followups.map((item) => `${item.item}, due ${item.dueDate}`).join('. ')}`
             : responseText;
-          if (result.read_back_text) void startRecordingRef.current(language);
           speak(spokenText, language, voice, () => {
-            if (!result.read_back_text && !result.saved && result.questions.length) {
+            if (!result.saved && result.questions.length) {
               void startRecordingRef.current(language);
             }
           });
@@ -547,6 +530,66 @@ export default function App() {
       addJudgeLog,
     ]
   );
+
+  const submitCorrections = useCallback(async (corrections: Record<string, unknown>) => {
+    try {
+      const response = await fetch('/api/turn', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          session_id: pipelineSessionIdRef.current,
+          transcript: '',
+          language,
+          corrections,
+        }),
+      });
+      const result = await response.json() as PipelineTurnResponse & { error?: string };
+      if (!response.ok) throw new Error(result.error || 'Could not apply field correction.');
+      setPipelineFields(result.fields);
+      setDangerResult(result.danger);
+      setActiveQuestion(result.questions[0] || null);
+      awaitingSaveConfirmationRef.current = Boolean(result.read_back_text);
+      setReadyToConfirm(Boolean(result.read_back_text) && !result.saved);
+      setStepState(result.saved ? 'saved' : result.questions.length ? 'confirm' : 'checking');
+      if (result.read_back_text || result.answer_text) {
+        speak(result.read_back_text || result.answer_text || '', language, voice, () => {
+          if (!result.saved && result.questions.length) void startRecordingRef.current(language);
+        });
+      }
+    } catch (error) {
+      setWorkflowError({
+        message: error instanceof Error ? error.message : 'Could not apply field correction.',
+        canRetry: true,
+      });
+    }
+  }, [language, speak, voice]);
+
+  const updateFollowup = useCallback(async (
+    recordId: string,
+    followupId: string,
+    completed: boolean
+  ) => {
+    try {
+      const response = await fetch(
+        `/api/records/${encodeURIComponent(recordId)}/followups/${encodeURIComponent(followupId)}`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ completed }),
+        }
+      );
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Could not update follow-up.');
+      const record = toSavedVisitRecord(result);
+      setSavedRecords((previous) => previous.map((item) => item.id === record.id ? record : item));
+      if (record.id === savedRecordId) setSavedFollowups(record.followups);
+    } catch (error) {
+      setWorkflowError({
+        message: error instanceof Error ? error.message : 'Could not update follow-up.',
+        canRetry: true,
+      });
+    }
+  }, [savedRecordId]);
 
   const handleTranscriptChunk = useCallback(
     (text: string, isFinal: boolean, metadata?: any) => {
@@ -613,27 +656,12 @@ export default function App() {
     }
   };
 
-  // Run Demo Scenario
-  const handleRunDemoScenario = (scenario: DemoScenario) => {
-    stopAudio();
-    stopRecording();
-    pipelineSessionIdRef.current = `visit-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    setPipelineFields({});
-    awaitingSaveConfirmationRef.current = false;
-    lastProcessedTranscriptRef.current = '';
-    visitTranscriptRef.current = '';
-    setTranscript(scenario.spokenText);
-    setLanguage(scenario.language as LanguageCode);
-    addJudgeLog('DEMO_SCENARIO_RUN', `${scenario.tag}: ${scenario.title}`);
-    processUtterance(scenario.spokenText);
-  };
-
   // Save Record
   const handleSaveRecord = async () => {
+    if (!readyToConfirm) return;
     await processUtterance('yes');
     return;
   };
-  saveRecordRef.current = handleSaveRecord;
 
   // Next Beneficiary
   const handleNextBeneficiary = () => {
@@ -642,12 +670,13 @@ export default function App() {
     setPipelineFields({});
     awaitingSaveConfirmationRef.current = false;
     lastProcessedTranscriptRef.current = '';
-    setFormData(INITIAL_FORM_DATA);
     setDangerResult(null);
     setTranscript('');
-    visitTranscriptRef.current = '';
     setExtractedJson(null);
     setSavedFollowups(null);
+    setSavedRecordId(null);
+    setReadyToConfirm(false);
+    setBeneficiarySearch('');
     setActiveQuestion(null);
     setStepState('listening');
     addJudgeLog('NEXT_BENEFICIARY', 'Session reset for new home visit');
@@ -658,46 +687,64 @@ export default function App() {
     stopAudio();
     pipelineSessionIdRef.current = `visit-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     setPipelineFields({});
+    setSavedFollowups(null);
+    setSavedRecordId(null);
+    setReadyToConfirm(false);
     awaitingSaveConfirmationRef.current = false;
     lastProcessedTranscriptRef.current = '';
     setTranscript('');
-    visitTranscriptRef.current = '';
     setDangerResult(null);
     setExtractedJson(null);
     setStepState('listening');
     handleToggleMic();
   };
 
+  const handleCancelVisit = () => {
+    stopAudio();
+    stopRecording();
+    void fetch(`/api/turn/${encodeURIComponent(pipelineSessionIdRef.current)}`, { method: 'DELETE' });
+    handleNextBeneficiary();
+  };
+
   // Purge all data
-  const handlePurgeAllData = () => {
+  const handlePurgeAllData = async (): Promise<boolean> => {
+    const activeSessionId = pipelineSessionIdRef.current;
     stopAudio();
     stopRecording();
     pipelineSessionIdRef.current = `visit-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     setPipelineFields({});
     awaitingSaveConfirmationRef.current = false;
     lastProcessedTranscriptRef.current = '';
-    visitTranscriptRef.current = '';
-    setSavedRecords([]);
-    setFormData(INITIAL_FORM_DATA);
     setDangerResult(null);
     setTranscript('');
     setExtractedJson(null);
     setSavedFollowups(null);
+    setSavedRecordId(null);
+    setReadyToConfirm(false);
     setJudgeLogs([]);
     try {
-      localStorage.removeItem('asha_saved_records');
       localStorage.removeItem('asha_hints_dismissed');
     } catch {}
-    void fetch('/api/beneficiaries', { method: 'DELETE' })
-      .then((response) => {
-        if (!response.ok) throw new Error('Could not purge synthetic beneficiaries.');
-        setNewBeneficiaries([]);
-      })
-      .catch(() => setWorkflowError({
-        message: 'Synthetic beneficiaries could not be purged from the backend.',
+    try {
+      const responses = await Promise.all([
+        fetch(`/api/turn/${encodeURIComponent(activeSessionId)}`, { method: 'DELETE' }),
+        fetch('/api/beneficiaries', { method: 'DELETE' }),
+        fetch('/api/records', { method: 'DELETE' }),
+      ]);
+      if (responses.some((response) => !response.ok)) {
+        throw new Error('One or more register items could not be deleted from the server.');
+      }
+      setSavedRecords([]);
+      setNewBeneficiaries([]);
+      setWorkflowError(null);
+      return true;
+    } catch (error) {
+      setWorkflowError({
+        message: error instanceof Error ? error.message : 'Register data could not be deleted.',
         canRetry: true,
-      }));
-    addJudgeLog('PURGE_COMPLETE', 'All patient records and transcripts purged for Responsible AI compliance');
+      });
+      return false;
+    }
   };
 
   const currentLangObj = LANGUAGE_CATALOG[language] || LANGUAGE_CATALOG['en-IN'];
@@ -741,7 +788,6 @@ export default function App() {
         audioLevel={audioLevel}
         showJudgeView={showJudgeView}
         onToggleJudgeView={() => setShowJudgeView((p) => !p)}
-        onOpenDemoScenarios={() => setShowDemoModal(true)}
         healthOk={healthOk}
         healthMessage={healthMessage}
         onRetryHealth={() => void refreshHealth()}
@@ -793,8 +839,58 @@ export default function App() {
             {/* Short First-Run Hint */}
             <OnboardingHints />
 
+            <section className="p-3 bg-white rounded-xl border border-gray-200 space-y-2">
+              <label htmlFor="beneficiary-search" className="block text-sm font-bold text-gray-800">
+                Select a beneficiary
+              </label>
+              <input
+                id="beneficiary-search"
+                value={beneficiarySearch}
+                onChange={(event) => setBeneficiarySearch(event.target.value)}
+                placeholder="Search name, ID, village or house number"
+                className="w-full px-3 py-3 rounded-lg border border-gray-300 text-base"
+              />
+              {beneficiarySearch.trim() && (
+                <div className="max-h-44 overflow-y-auto space-y-1">
+                  {newBeneficiaries
+                    .filter((beneficiary) => [
+                      beneficiary.name,
+                      beneficiary.id,
+                      beneficiary.village,
+                      beneficiary.house_no,
+                    ].some((value) => value.toLocaleLowerCase().includes(beneficiarySearch.toLocaleLowerCase())))
+                    .slice(0, 8)
+                    .map((beneficiary) => (
+                      <button
+                        key={beneficiary.id}
+                        type="button"
+                        onClick={() => {
+                          setBeneficiarySearch(`${beneficiary.name} · ${beneficiary.id}`);
+                          void submitCorrections({
+                            name: beneficiary.name,
+                            beneficiaryId: beneficiary.id,
+                            houseNo: beneficiary.house_no,
+                            village: beneficiary.village,
+                            ...(beneficiary.age !== null ? { age: beneficiary.age } : {}),
+                            beneficiaryType: beneficiary.category === 'ANC' ? 'pregnant_woman' : 'mother',
+                          });
+                        }}
+                        className="w-full p-2 text-left rounded-lg bg-teal-50 hover:bg-teal-100 text-sm"
+                      >
+                        <strong>{beneficiary.name}</strong> · {beneficiary.id} · House {beneficiary.house_no}, {beneficiary.village}
+                      </button>
+                    ))}
+                </div>
+              )}
+            </section>
+
             {/* Step Tracker */}
             <StepTracker currentStep={stepState} />
+            {activeQuestion && (
+              <p className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-sm font-semibold text-amber-950" aria-live="polite">
+                {activeQuestion}
+              </p>
+            )}
 
             {/* Danger Sign Alert Banner */}
             {dangerResult && dangerResult.decision === 'FLAG' && (
@@ -935,7 +1031,7 @@ export default function App() {
               {/* Vaccinations Card */}
               <FieldCard
                 label="Vaccinations / TT Doses"
-                value={formData.vaccinationsGiven.join(', ') || 'TT1, TT2 checked'}
+                value={formData.vaccinationsGiven.length ? formData.vaccinationsGiven.join(', ') : null}
                 state={formData.fieldStates.vaccinations}
                 icon={<Syringe className="w-5 h-5" />}
                 onTap={() =>
@@ -953,10 +1049,15 @@ export default function App() {
                 ['pregnancyMonths', 'Months Pregnant'],
                 ['babyAgeDays', 'Baby Age (days)'],
                 ['houseNo', 'House Number'],
+                ['village', 'Village'],
+                ['visitDate', 'Visit Date'],
+                ['gestationalWeeks', 'Gestational Weeks'],
                 ['hemoglobin', 'Haemoglobin'],
                 ['lastAncDate', 'Last ANC Date'],
                 ['ttStatus', 'TT / Td Doses'],
                 ['ttLastDoseDate', 'Last TT / Td Dose Date'],
+                ['ifaTablets', 'IFA Tablet Quantity'],
+                ['vaccinationsDue', 'Vaccinations Due'],
                 ['symptoms', 'Symptoms'],
                 ['notes', 'Other Notes'],
               ].map(([key, label]) => {
@@ -976,8 +1077,13 @@ export default function App() {
                 const evidence = item ? {
                   value: item.value,
                   sourceText: item.evidence,
-                  detector: 'LLM' as const,
+                  detector: item.detector || 'rule_engine',
                   timestamp: new Date().toLocaleTimeString(),
+                  previousValues: item.previousValues?.map((previous) => ({
+                    value: previous.value,
+                    timestamp: previous.timestamp,
+                    reason: previous.evidence,
+                  })),
                 } : undefined;
                 return (
                   <FieldCard
@@ -996,32 +1102,43 @@ export default function App() {
             {/* Post-Save Summary and Spoken Follow-up Checklist */}
             {savedFollowups && (
               <FollowupSummary
-                beneficiaryName={formData.beneficiaryName || 'Sita Devi'}
-                beneficiaryId={formData.beneficiaryId || 'BEN-001'}
+                beneficiaryName={formData.beneficiaryName || ''}
+                beneficiaryId={formData.beneficiaryId || ''}
                 followups={savedFollowups}
                 onNextBeneficiary={handleNextBeneficiary}
                 onViewRecords={() => setActiveTab('records')}
+                onCompleteFollowup={(followupId, completed) =>
+                  savedRecordId ? updateFollowup(savedRecordId, followupId, completed) : Promise.resolve()
+                }
               />
             )}
 
             {/* Bottom Actions Bar */}
             {!savedFollowups && (
-              <div className="pt-2 flex items-center gap-2">
+              <div className="pt-2 flex flex-wrap items-center gap-2">
                 <button
                   onClick={handleSaveRecord}
-                  className="flex-1 py-3 px-4 rounded-xl bg-teal-600 hover:bg-teal-700 active:scale-95 text-white font-bold text-sm shadow-sm flex items-center justify-center gap-2 transition"
+                  disabled={!readyToConfirm}
+                  className="flex-1 min-w-40 py-3 px-4 rounded-xl bg-teal-600 hover:bg-teal-700 active:scale-95 text-white font-bold text-sm shadow-sm flex items-center justify-center gap-2 transition disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <Save className="w-4 h-4" />
-                  {currentLangObj.ui.save_record}
+                  Confirm and save
                 </button>
-
                 <button
-                  onClick={handleReRecord}
-                  className="py-3 px-4 rounded-xl bg-white border border-gray-300 hover:bg-gray-100 text-gray-700 font-semibold text-sm flex items-center justify-center gap-1.5 transition active:scale-95"
-                  title="Re-record Visit"
+                  onClick={() => {
+                    const uncertain = Object.entries(pipelineFields).find(([, item]) => item.state === 'uncertain');
+                    const key = uncertain?.[0] || 'weight';
+                    setSelectedPipelineField({ key, label: key.replace(/[A-Z]/g, (letter) => ` ${letter}`).replace(/^./, (letter) => letter.toUpperCase()) });
+                  }}
+                  className="flex-1 min-w-36 py-3 px-3 rounded-xl bg-white border border-gray-300 hover:bg-gray-100 text-gray-700 font-semibold text-sm transition"
                 >
-                  <RotateCcw className="w-4 h-4" />
-                  {currentLangObj.ui.rerecord}
+                  Correct information
+                </button>
+                <button
+                  onClick={handleCancelVisit}
+                  className="py-3 px-3 rounded-xl bg-white border border-gray-300 hover:bg-gray-100 text-gray-700 font-semibold text-sm transition"
+                >
+                  Cancel visit
                 </button>
               </div>
             )}
@@ -1033,9 +1150,11 @@ export default function App() {
           <RecordsScreen
             records={savedRecords}
             beneficiaries={newBeneficiaries}
-            onAddBeneficiary={(name, houseNo, category) => {
-              const beneficiary = createSyntheticBeneficiary(name, houseNo, category);
-              addJudgeLog('NEW_BENEFICIARY_ADDED', `New synthetic/demo beneficiary ${beneficiary.name} added.`);
+            onCompleteFollowup={updateFollowup}
+            onAddBeneficiary={async (name, houseNo, village, category) => {
+              const added = await createBeneficiary(name, houseNo, category, village);
+              if (added) addJudgeLog('NEW_BENEFICIARY_ADDED', `Beneficiary ${name} registered.`);
+              return added;
             }}
           />
         )}
@@ -1111,18 +1230,24 @@ export default function App() {
           state={formData.fieldStates[selectedFieldModal.fieldKey]}
           evidence={formData.evidenceTrail[selectedFieldModal.fieldKey]}
           onUpdateValue={(newVal) => {
-            setFormData((prev) => ({
-              ...prev,
-              [selectedFieldModal.fieldKey === 'weight'
-                ? 'weight'
-                : selectedFieldModal.fieldKey === 'beneficiary'
-                ? 'beneficiaryName'
-                : 'visitType']: newVal,
-              fieldStates: {
-                ...prev.fieldStates,
-                [selectedFieldModal.fieldKey]: 'confirmed',
-              },
-            }));
+            let corrections: Record<string, unknown>;
+            if (selectedFieldModal.fieldKey === 'bp') {
+              const match = String(newVal).match(/^\s*(\d{2,3})\s*(?:\/|by)\s*(\d{2,3})\s*$/i);
+              if (!match) {
+                setWorkflowError({ message: 'Enter blood pressure as systolic/diastolic, for example 110/70.', canRetry: true });
+                return;
+              }
+              corrections = { bpSystolic: Number(match[1]), bpDiastolic: Number(match[2]) };
+            } else if (selectedFieldModal.fieldKey === 'beneficiary') {
+              corrections = { name: newVal };
+            } else if (selectedFieldModal.fieldKey === 'ifa') {
+              corrections = typeof newVal === 'number' ? { ifaTablets: newVal } : { ifaStatus: newVal };
+            } else if (selectedFieldModal.fieldKey === 'vaccinations') {
+              corrections = { vaccinationsGiven: String(newVal).split(',').map((item) => item.trim()).filter(Boolean) };
+            } else {
+              corrections = { [selectedFieldModal.fieldKey]: newVal };
+            }
+            void submitCorrections(corrections);
             addJudgeLog('MANUAL_CORRECTION', `Field ${selectedFieldModal.fieldName} updated manually to ${newVal}`);
           }}
         />
@@ -1140,49 +1265,17 @@ export default function App() {
           evidence={pipelineFields[selectedPipelineField.key] ? {
             value: pipelineFields[selectedPipelineField.key].value,
             sourceText: pipelineFields[selectedPipelineField.key].evidence,
-            detector: 'LLM',
+            detector: pipelineFields[selectedPipelineField.key].detector || 'rule_engine',
             timestamp: new Date().toLocaleTimeString(),
+            previousValues: pipelineFields[selectedPipelineField.key].previousValues?.map((previous) => ({
+              value: previous.value,
+              timestamp: previous.timestamp,
+              reason: previous.evidence,
+            })),
           } : undefined}
           onUpdateValue={(newValue) => {
             const fieldKey = selectedPipelineField.key;
-            setPipelineFields((previous) => ({
-              ...previous,
-              [fieldKey]: {
-                value: newValue,
-                state: 'confirmed',
-                evidence: previous[fieldKey]?.evidence || 'Manual keypad correction',
-              },
-            }));
-            void fetch('/api/turn', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                session_id: pipelineSessionIdRef.current,
-                transcript: '',
-                language,
-                corrections: { [fieldKey]: newValue },
-              }),
-            }).then(async (response) => {
-              const result = await response.json() as PipelineTurnResponse & { error?: string };
-              if (!response.ok) throw new Error(result.error || 'Could not apply field correction.');
-              setPipelineFields(result.fields);
-              setDangerResult(result.danger);
-              setActiveQuestion(result.questions[0] || null);
-              awaitingSaveConfirmationRef.current = Boolean(result.read_back_text);
-              if (result.read_back_text) {
-                void startRecordingRef.current(language);
-                speak(result.read_back_text, language, voice);
-              } else if (result.answer_text) {
-                speak(result.answer_text, language, voice, () => {
-                  if (result.questions.length) void startRecordingRef.current(language);
-                });
-              }
-            }).catch((error) => {
-              setWorkflowError({
-                message: error instanceof Error ? error.message : 'Could not apply field correction.',
-                canRetry: true,
-              });
-            });
+            void submitCorrections({ [fieldKey]: newValue });
           }}
         />
       )}
@@ -1193,25 +1286,18 @@ export default function App() {
         promptText={disambiguationState.promptText}
         candidates={disambiguationState.candidates}
         onSelectCandidate={(cand) => {
-          setFormData((prev) => ({
-            ...prev,
-            beneficiaryName: cand.name,
+          void submitCorrections({
+            name: cand.name,
             beneficiaryId: cand.id,
             houseNo: cand.house_no,
             village: cand.village,
-            fieldStates: { ...prev.fieldStates, beneficiary: 'confirmed' },
-          }));
+            ...(cand.age !== null ? { age: cand.age } : {}),
+            beneficiaryType: cand.category === 'ANC' ? 'pregnant_woman' : 'mother',
+          });
           setDisambiguationState({ isOpen: false, promptText: '', candidates: [] });
           addJudgeLog('DISAMBIGUATION_RESOLVED', `Selected ${cand.name} (House ${cand.house_no})`);
         }}
         onCancel={() => setDisambiguationState({ isOpen: false, promptText: '', candidates: [] })}
-      />
-
-      {/* Hackathon Demo Scenarios Modal */}
-      <DemoScenariosModal
-        isOpen={showDemoModal}
-        onClose={() => setShowDemoModal(false)}
-        onRunScenario={handleRunDemoScenario}
       />
 
       {/* Live Judge View Side Panel */}

@@ -1,4 +1,5 @@
 import type { ExtractedVisitData } from './extractor.ts';
+import { buildExtractionPrompt } from './extractionPrompt.ts';
 
 export interface GroqModel {
   id: string;
@@ -148,7 +149,7 @@ export async function extractWithGroq(options: {
         },
       }
     : { type: 'json_object' };
-  const prompt = `Language code: ${options.language}\nTranscript: ${options.transcript}`;
+  const prompt = buildExtractionPrompt(options.transcript, options.language);
   const response = await fetchImpl(`${baseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
