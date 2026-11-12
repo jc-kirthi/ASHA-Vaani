@@ -1,7 +1,7 @@
 # ASHA Vaani (आशा वाणी)
 Healthcare Voice Field Register for ASHA Workers — Gnani Voice Hackathon (PS1)
 
-ASHA Vaani is a mobile-first voice register that converts spoken home-visit notes in Indian languages into verified clinical records with zero typing, combining live voice streaming with deterministic maternal/newborn danger-sign safety.
+ASHA Vaani is a voice-register prototype. Finalized transcripts are sent through one backend extraction flow; the deterministic danger-sign engine remains separate from language-model extraction.
 
 ---
 
@@ -13,13 +13,21 @@ npm run dev
 
 Starts the unified backend and frontend on port 3000 (`http://0.0.0.0:3000`), serving both the responsive web application and live WebSocket proxies for Gnani Prisma STT and Timbre TTS.
 
-To verify your environment keys and live Gnani/Gemini connections:
+To check the configured backend health:
 ```bash
-python3 scripts/check_env.py
+npm run check
 ```
 
-To run unit and clinical safety evaluation tests:
+To make one live extraction probe against each configured LLM provider:
 ```bash
+npm run check:llm
+```
+
+To run the application tests and clinical evaluation:
+```bash
+npm run lint
+npm run test:llm
+npm run test:turn
 python3 tests/test_all.py
 python3 scripts/eval.py
 ```
@@ -28,11 +36,17 @@ python3 scripts/eval.py
 
 ## 2. Environment Variables
 
-Set these three variables in your environment or `.env` file (never commit them):
+Copy `.env.example` to `.env` in the project root and set values locally. Never commit `.env`.
 
 - `GNANI_API_KEY`: Subscription key for Gnani Prisma v3.0 STT and Timbre v3.0 TTS (`https://api.vachana.ai`). Kept strictly on the backend.
-- `LLM_API_KEY`: Google Gemini API key used server-side for entity extraction into strict RFC 8259 JSON (`gemini-2.5-flash`).
+- `LLM_API_KEY`: Google Gemini API key. Gemini is the primary structured extractor.
+- `LLM_MODEL`: Gemini model identifier available to your API key. Set this explicitly; the application does not assume a model name.
+- `FALLBACK_API_KEY`: Groq API key. Optional, but required to use the Groq fallback.
+- `FALLBACK_BASE_URL`: Groq-compatible API base URL; defaults in `.env.example` to `https://api.groq.com/openai/v1`.
+- `FALLBACK_MODEL`: Optional active, fast, non-reasoning Groq chat model. Run `npm run check:llm` to discover and verify a model; set the reported identifier here.
 - `ENCRYPTION_KEY`: 32-byte secret key used for AES-256-GCM authenticated encryption of sensitive beneficiary health records at rest.
+
+`/api/health` reports key-presence booleans, service-check results, and the port; it never returns key values. `npm run check:llm` sends a small synthetic extraction request and prints provider status, model, and latency. It does not modify visit data.
 
 ---
 
@@ -42,32 +56,30 @@ Set these three variables in your environment or `.env` file (never commit them)
 Browser Mic (16kHz PCM) 
   --> Backend WebSocket Proxy (`/ws/stt`) 
   --> Gnani Prisma v3.0 STT (`wss://api.vachana.ai/stt/v3/stream`)
-  --> Spoken Transcript
-  --> MoHFW Deterministic Rule Engine (FLAG / CLEAR / ASK) [Never decided by LLM]
-  --> Gemini 2.5 Flash (`/api/extract`) for structured JSON entity mapping
-  --> Gnani Timbre v3.0 Streaming TTS (`wss://api.vachana.ai/api/v1/tts`)
-  --> Web Audio Instant Playback with <10ms Barge-in
-  --> Encrypted Storage at Rest (AES-256-GCM)
+  --> Final transcript --> POST /api/turn
+  --> Gemini structured extraction
+  --> Groq fallback if Gemini is unavailable
+  --> Existing deterministic rule-based extractor if both providers fail
+  --> Separate deterministic danger-sign engine (FLAG / CLEAR / ASK)
+  --> Gnani Timbre v3.0 speech response and encrypted visit storage
 ```
+
+The LLM providers receive only the current transcript, selected language, and the shared extraction schema. They extract fields only; danger decisions are made by the deterministic engine. HTTP 429/503 responses open that provider's circuit for at least 60 seconds; invalid structured output is retried once before switching providers. Other errors are not retried, and provider attempts are time-limited to keep the live turn responsive. Extracted values are validated before they reach the turn pipeline.
+
+The fallback model is discovered from the configured provider's `/models` response; the application does not hardcode a Groq model. Automatic selection looks for a model identifier containing `instant` and excludes reasoning-model identifiers (and models explicitly marked inactive). Otherwise configure `FALLBACK_MODEL` explicitly to a model available to your account. The provider model-list API does not expose a measured latency guarantee.
 
 ---
 
 ## 4. Languages Supported
 
-- **Fully Tested (Lexicon Active)**:
-  - Hindi (`hi-IN`) — Full clinical lexicon, dual-method number normalizer, and transitional safety rules.
-  - Kannada (`kn-IN`) — Full clinical lexicon, dual-method number normalizer, and dialect guards.
-  - Indian English (`en-IN`) — Full clinical lexicon, code-mix parsing, and fractional normalizer.
-- **Supported in Strict Safety Mode**:
-  - Bengali (`bn-IN`), Marathi (`mr-IN`), Gujarati (`gu-IN`), Punjabi (`pa-IN`), Telugu (`te-IN`), Tamil (`ta-IN`), Malayalam (`ml-IN`).
-  - Strict mode rule: Any unverified or ambiguous symptom automatically defaults to targeted clarification (`ASK`) to guarantee patient safety across regional dialects.
-- **Auto-LID**: Automatic language identification routes incoming speech to the correct acoustic model.
+- **Text-tested by the repository's current test suite**: Hindi (`hi-IN`), Kannada (`kn-IN`), and Indian English (`en-IN`).
+- Other language options may be present in the UI, but their complete extraction, speech, and safety behavior has not been verified by this project’s current tests.
 
 ---
 
 ## 5. Danger-Sign MoHFW Citation TODOs
 
-All maternal and neonatal danger signs are strictly governed by deterministic rules requiring clinical citations to be verified against official Ministry of Health and Family Welfare (MoHFW) / National Health Mission (NHM) documents:
+The following citation entries are draft TODOs, not verified references. Verify each against current official Ministry of Health and Family Welfare (MoHFW) / National Health Mission (NHM) documents before operational use:
 
 1. `vaginal_bleeding`: `[TODO: Verify MoHFW ASHA Training Module 6 - Maternal Health, Section 3.2, Page 28]`
 2. `convulsions_fits`: `[TODO: Verify MoHFW ASHA Training Module 6 - High Risk Pregnancy, Section 4.1, Page 34]`
@@ -88,4 +100,6 @@ All maternal and neonatal danger signs are strictly governed by deterministic ru
 
 1. **Active Connectivity for Live Voice**: Real-time streaming via Gnani Prisma v3.0 and Timbre v3.0 requires an active internet connection (broadband or 4G).
 2. **Audio Hardware**: Browser microphone access requires HTTPS or `localhost` context with user permission.
-3. **Medical Disclaimer**: ASHA Vaani assists community health workers with register bookkeeping and emergency escalation; it does not replace physician diagnosis, clinical judgment, or emergency medical dispatch.
+3. **LLM availability**: Live extraction requires an available Gemini model. Groq fallback requires its own key, base URL, and an available model. When both providers fail, the existing rule-based extractor is used; if it extracts no fields, the transcript is retained and the user is asked to repeat it.
+4. **Provider verification**: The current `.env` does not specify `LLM_MODEL`, and no Groq key/model is configured. The last `npm run check:llm` therefore reported both providers as `NOT_CONFIGURED`; configure the models and keys locally, then rerun the check. No live Groq extraction or exact Groq model is claimed.
+5. **Medical disclaimer**: This prototype does not replace clinical judgment or emergency medical services. Danger-sign source references above remain draft items for human verification.

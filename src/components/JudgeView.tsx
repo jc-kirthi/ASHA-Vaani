@@ -38,7 +38,7 @@ export const JudgeView: React.FC<JudgeViewProps> = ({
           <div>
             <h3 className="text-sm font-bold text-white leading-tight">Hackathon Judge View</h3>
             <span className="text-[10px] text-teal-300 font-mono font-medium block">
-              STT: Gnani Prisma v3.0 | TTS: Gnani Timbre v3.0 | LLM: Gemini
+              STT: Gnani Prisma v3.0 | TTS: Gnani Timbre v3.0 | LLM: Gemini → Groq → Rules
             </span>
           </div>
         </div>
@@ -59,7 +59,7 @@ export const JudgeView: React.FC<JudgeViewProps> = ({
           <div className="text-[11px] leading-tight">
             <span className="text-gray-300 font-bold block">Live Model Pipeline:</span>
             <span className="text-emerald-400 font-semibold">
-              STT: Gnani Prisma v3.0 | TTS: Gnani Timbre v3.0 | LLM: Gemini
+              STT: Gnani Prisma v3.0 | TTS: Gnani Timbre v3.0 | LLM: Gemini → Groq → Rules
             </span>
           </div>
         </div>
@@ -140,14 +140,33 @@ export const JudgeView: React.FC<JudgeViewProps> = ({
             <FileCode className="w-3.5 h-3.5" />
             Extracted Clinical JSON
           </div>
-          {extractedJson?.llm_status && extractedJson.llm_status !== 'ready' && (
+          {extractedJson?.llm_status === 'busy' && (
             <div className="flex items-start gap-1.5 rounded-lg border border-amber-700 bg-amber-950/60 p-2 text-[10px] text-amber-200">
               <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
-              <span>
-                LLM busy, retrying
-                {extractedJson.llm_status === 'busy' && '. Transcript retained; please say it once more.'}
-                {extractedJson.llm_status === 'retried' && ' (recovered).'}
-              </span>
+              <span>Sorry, I did not catch that. Please say it once more.</span>
+            </div>
+          )}
+          {extractedJson?.extraction_status && (
+            <div className="rounded-lg border border-gray-700 bg-gray-900 p-2 text-[10px] text-gray-300 space-y-1">
+              <div className="font-semibold text-teal-300">
+                {extractedJson.extraction_status.provider === 'Gemini'
+                  ? `LLM: Gemini (${extractedJson.extraction_status.model || 'unknown model'})`
+                  : extractedJson.extraction_status.provider === 'Groq'
+                    ? `LLM: Fallback (Groq/${extractedJson.extraction_status.model || 'unknown model'})`
+                    : 'Extraction: Rules fallback'}
+              </div>
+              <div>
+                Failed: {extractedJson.extraction_status.failedProviders.length
+                  ? extractedJson.extraction_status.failedProviders.map((item: { provider: string; status: string }) =>
+                      `${item.provider} ${item.status}`).join(', ')
+                  : 'none'}
+              </div>
+              <div>
+                Latency: Gemini {extractedJson.extraction_status.providerLatencyMs.Gemini} ms ·
+                Groq {extractedJson.extraction_status.providerLatencyMs.Groq} ms ·
+                total {extractedJson.extraction_status.totalLatencyMs} ms ·
+                {extractedJson.extraction_status.llmCalls} LLM calls
+              </div>
             </div>
           )}
           <pre className="p-2 bg-gray-950 rounded-lg overflow-x-auto text-[10px] text-emerald-300 max-h-44 border border-gray-800">

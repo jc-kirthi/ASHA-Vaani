@@ -9,6 +9,8 @@ import { synthesizeTimbreV3, warmTTSCache } from './server/gnani.ts';
 import { encryptPayload, decryptPayload } from './server/crypto.ts';
 import type { BeneficiaryRecord } from './src/types/index.ts';
 import { processTurn } from './server/turn.ts';
+import { warmGroqModelCatalog } from './server/groq.ts';
+import { createHealthResponse } from './server/health.ts';
 
 const app = express();
 const server = http.createServer(app);
@@ -73,6 +75,7 @@ app.delete('/api/beneficiaries', async (_req, res) => {
 type HealthStatus = {
   gnani_key: boolean;
   llm_key: boolean;
+  fallback_key: boolean;
   encryption_key: boolean;
   stt_ok: boolean;
   tts_ok: boolean;
@@ -105,8 +108,8 @@ app.get('/api/config', (req, res) => {
   res.json({
     sttModel: 'prisma-v3.0',
     ttsModel: 'timbre-v3.0',
-    llmModel: process.env.LLM_MODEL || 'gemini-3.8-flash',
-    llmModelBackup: process.env.LLM_MODEL_BACKUP || 'gemini-3.5-flash-lite',
+    llmModel: process.env.LLM_MODEL?.trim() || null,
+    fallbackModel: process.env.FALLBACK_MODEL?.trim() || null,
     sttEndpoint: 'wss://api.vachana.ai/stt/v3/stream',
     ttsEndpoint: 'wss://api.vachana.ai/api/v1/tts',
     testMode: process.env.LLM_PROVIDER === 'mock',
@@ -387,7 +390,13 @@ async function startServer() {
 
   server.listen(PORT, HOST, () => {
     console.log(`[ASHA Vaani] Unified Server running on http://${HOST}:${PORT}`);
-    console.log(`[ASHA Vaani] STT: Gnani Prisma v3.0 | TTS: Gnani Timbre v3.0 | LLM: Gemini`);
+    console.log(`[ASHA Vaani] STT: Gnani Prisma v3.0 | TTS: Gnani Timbre v3.0 | LLM: Gemini -> Groq -> Rules`);
+    void warmGroqModelCatalog().catch((error: unknown) => {
+      const status = error && typeof error === 'object' && 'status' in error
+        ? String(error.status)
+        : 'UNAVAILABLE';
+      console.warn(`[LLM] Groq model discovery status=${status}`);
+    });
     warmTTSCache().catch(() => {
       console.warn('[ASHA Vaani] Timbre fixed-line cache warmup failed.');
     });
@@ -399,18 +408,20 @@ startServer();
 async function checkHealth(): Promise<HealthStatus> {
   const gnaniKey = Boolean(process.env.GNANI_API_KEY);
   const llmKey = Boolean(process.env.LLM_API_KEY);
+  const fallbackKey = Boolean(process.env.FALLBACK_API_KEY?.trim());
   const encryptionKey = Boolean(process.env.ENCRYPTION_KEY);
   const [sttOk, ttsOk] = gnaniKey
     ? await Promise.all([probeGnaniStt(), probeGnaniTts()])
     : [false, false];
-  return {
-    gnani_key: gnaniKey,
-    llm_key: llmKey,
-    encryption_key: encryptionKey,
-    stt_ok: sttOk,
-    tts_ok: ttsOk,
+  return createHealthResponse({
     port: PORT,
-  };
+    gnaniKey,
+    llmKey,
+    fallbackKey,
+    encryptionKey,
+    sttOk,
+    ttsOk,
+  });
 }
 
 async function readNewBeneficiaries(): Promise<BeneficiaryRecord[]> {

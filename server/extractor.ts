@@ -1,4 +1,5 @@
 import { GoogleGenAI } from '@google/genai';
+import { extractWithGroq, LlmProviderError } from './groq.ts';
 
 export interface ExtractedVisitData {
   beneficiaryName: string | null;
@@ -35,12 +36,30 @@ export interface ExtractedVisitData {
   confidence: Record<string, 'high' | 'uncertain' | 'missing'>;
   extractionStatus: 'confirmed' | 'uncertain';
   modelUsed: string;
-  llmStatus?: 'ready' | 'retried';
+  llmStatus?: 'ready' | 'retried' | 'busy';
   llmRetries?: number;
   llmBackupUsed?: boolean;
+  extractionDiagnostics?: ExtractionDiagnostics;
 }
 
-const responseJsonSchema = {
+export interface ExtractionDiagnostics {
+  provider: 'Gemini' | 'Groq' | 'Rules';
+  model: string | null;
+  failedProviders: Array<{ provider: 'Gemini' | 'Groq'; status: string }>;
+  providerLatencyMs: { Gemini: number; Groq: number };
+  totalLatencyMs: number;
+  llmCalls: number;
+}
+
+export interface ExtractionProviderAdapters {
+  gemini: (transcript: string, language: string, signal: AbortSignal) => Promise<ExtractedVisitData>;
+  groq: (transcript: string, language: string, signal: AbortSignal) => Promise<ExtractedVisitData>;
+  isConfigured?: (provider: 'Gemini' | 'Groq') => boolean;
+  now?: () => number;
+  logFailure?: (provider: 'Gemini' | 'Groq', status: string, message: string) => void;
+}
+
+export const responseJsonSchema = {
   type: 'object',
   additionalProperties: false,
   required: [
@@ -108,179 +127,285 @@ const FIELD_NAMES = [
   'weight', 'bp', 'hemoglobin', 'lastAncDate', 'ttStatus', 'ifa', 'vaccinations',
 ] as const;
 
+const PROVIDER_COOLDOWN_MS = 60_000;
+const EXTRACTION_DEADLINE_MS = 5_000;
+const PROVIDER_ATTEMPT_TIMEOUT_MS = 1_500;
+const providerCircuitUntil = new Map<'Gemini' | 'Groq', number>();
+
 class InvalidExtractionError extends Error {}
 
-const LLM_TOTAL_TIMEOUT_MS = 6_000;
-const LLM_ATTEMPT_TIMEOUT_MS = 1_000;
-const LLM_BACKOFF_MS = [500, 1_000];
-const DEFAULT_LLM_MODEL = 'gemini-3.8-flash';
-const DEFAULT_LLM_MODEL_BACKUP = 'gemini-3.5-flash-lite';
+const REQUIRED_EXTRACTION_FIELDS = [
+  'beneficiaryName', 'beneficiaryNames', 'beneficiaryType', 'age', 'houseNo',
+  'village', 'visitType', 'pregnancyMonths', 'gestationalWeeks', 'babyAgeDays',
+  'weight', 'bpSystolic', 'bpDiastolic', 'hemoglobin', 'lastAncDate',
+  'ttStatus', 'ttLastDoseDate', 'ifaStatus', 'ifaTablets', 'vaccinationsGiven',
+  'symptoms', 'notes', 'evidence',
+];
+const REQUIRED_EVIDENCE_FIELDS = [
+  'beneficiaryName', 'age', 'houseNo', 'weight', 'bloodPressure', 'ifaStatus',
+];
+const NULLABLE_STRING_FIELDS = [
+  'beneficiaryName', 'houseNo', 'village', 'lastAncDate', 'ttStatus',
+  'ttLastDoseDate', 'ifaStatus',
+];
+const NULLABLE_NUMBER_FIELDS = [
+  'age', 'pregnancyMonths', 'gestationalWeeks', 'babyAgeDays', 'weight',
+  'bpSystolic', 'bpDiastolic', 'hemoglobin', 'ifaTablets',
+];
 
-export class GeminiUnavailableError extends Error {
-  constructor(
-    readonly status: string,
-    readonly model: string,
-    readonly retries: number,
-    readonly backupTried: boolean
-  ) {
-    super('Gemini extraction unavailable.');
-    this.name = 'GeminiUnavailableError';
+function assertExtractionSchema(value: Record<string, unknown>): void {
+  if (REQUIRED_EXTRACTION_FIELDS.some((key) => !Object.prototype.hasOwnProperty.call(value, key))) {
+    throw new InvalidExtractionError('Extraction is missing required schema fields.');
   }
-}
-
-export interface GeminiResilienceResult<T> {
-  value: T;
-  model: string;
-  attempts: number;
-  backupUsed: boolean;
-}
-
-interface GeminiResilienceOptions<T> {
-  primaryModel: string;
-  backupModel: string;
-  invoke: (model: string, timeoutMs: number, signal: AbortSignal) => Promise<T>;
-  delay?: (ms: number) => Promise<void>;
-  logFailure?: (status: string, model: string) => void;
-}
-
-export async function runGeminiWithResilience<T>(
-  options: GeminiResilienceOptions<T>
-): Promise<GeminiResilienceResult<T>> {
-  const deadline = Date.now() + LLM_TOTAL_TIMEOUT_MS;
-  const delay = options.delay || ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-  const logFailure = options.logFailure || ((status, model) => {
-    console.warn(`[LLM] Gemini request failed status=${status} model=${model}`);
-  });
-  let attempts = 0;
-  let lastStatus = 'UNAVAILABLE';
-  let lastModel = options.primaryModel;
-  let backupTried = false;
-
-  const tryModel = async (model: string): Promise<GeminiResilienceResult<T> | null> => {
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) return null;
-    attempts += 1;
-    lastModel = model;
-    const timeoutMs = Math.min(LLM_ATTEMPT_TIMEOUT_MS, remaining);
-    const controller = new AbortController();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      const value = await Promise.race([
-        options.invoke(model, timeoutMs, controller.signal),
-        new Promise<never>((_resolve, reject) => {
-          timer = setTimeout(() => {
-            controller.abort();
-            reject(new GeminiAttemptTimeoutError());
-          }, timeoutMs);
-        }),
-      ]);
-      return { value, model, attempts, backupUsed: model !== options.primaryModel };
-    } catch (error) {
-      lastStatus = getGeminiFailureStatus(error);
-      logFailure(lastStatus, model);
-      return null;
-    } finally {
-      if (timer) clearTimeout(timer);
-    }
-  };
-
-  const execute = async (): Promise<GeminiResilienceResult<T>> => {
-    for (let primaryAttempt = 0; primaryAttempt < 3; primaryAttempt += 1) {
-      const result = await tryModel(options.primaryModel);
-      if (result) return result;
-      if (!isRetryableGeminiStatus(lastStatus) || primaryAttempt === 2) break;
-      const waitMs = LLM_BACKOFF_MS[primaryAttempt];
-      if (Date.now() + waitMs >= deadline) break;
-      await delay(waitMs);
-    }
-
-    backupTried = options.backupModel !== options.primaryModel && Date.now() < deadline;
-    if (backupTried) {
-      const result = await tryModel(options.backupModel);
-      if (result) return result;
-    }
-
-    throw new GeminiUnavailableError(lastStatus, lastModel, attempts, backupTried);
-  };
-
-  let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      execute(),
-      new Promise<never>((_resolve, reject) => {
-        deadlineTimer = setTimeout(
-          () => reject(new GeminiUnavailableError(lastStatus, lastModel, attempts, backupTried)),
-          LLM_TOTAL_TIMEOUT_MS
-        );
-      }),
-    ]);
-  } finally {
-    if (deadlineTimer) clearTimeout(deadlineTimer);
+  if (Object.keys(value).some((key) => !REQUIRED_EXTRACTION_FIELDS.includes(key))) {
+    throw new InvalidExtractionError('Extraction contains unsupported schema fields.');
   }
-}
-
-class GeminiAttemptTimeoutError extends Error {}
-
-function getGeminiFailureStatus(error: unknown): string {
-  if (error instanceof GeminiAttemptTimeoutError) return 'TIMEOUT';
-  if (!error || typeof error !== 'object') return 'NETWORK';
-  const candidate = error as {
-    status?: unknown;
-    code?: unknown;
-    message?: unknown;
-    cause?: unknown;
-    error?: unknown;
-  };
-  const statusValue = Number(candidate.status ?? candidate.code);
-  if (statusValue === 429 || statusValue === 503) return String(statusValue);
-  const code = String(candidate.code || '').toUpperCase();
-  const message = String(candidate.message || '').toLowerCase();
+  for (const key of NULLABLE_STRING_FIELDS) {
+    if (value[key] !== null && typeof value[key] !== 'string') {
+      throw new InvalidExtractionError('Extraction contains an invalid string field.');
+    }
+  }
+  for (const key of NULLABLE_NUMBER_FIELDS) {
+    if (value[key] !== null && (typeof value[key] !== 'number' || !Number.isFinite(value[key]))) {
+      throw new InvalidExtractionError('Extraction contains an invalid numeric field.');
+    }
+  }
   if (
-    ['ETIMEDOUT', 'ESOCKETTIMEDOUT', 'UND_ERR_CONNECT_TIMEOUT', 'ABORT_ERR'].includes(code) ||
-    /timed?\s*out|timeout|aborted/.test(message)
+    !Array.isArray(value.beneficiaryNames) ||
+    value.beneficiaryNames.some((name) => typeof name !== 'string') ||
+    !['pregnant_woman', 'newborn', 'mother', 'unknown'].includes(String(value.beneficiaryType)) ||
+    (value.visitType !== null && !['ANC', 'PNC', 'immunisation'].includes(String(value.visitType))) ||
+    !Array.isArray(value.vaccinationsGiven) ||
+    value.vaccinationsGiven.some((item) => typeof item !== 'string') ||
+    typeof value.notes !== 'string'
   ) {
-    return 'TIMEOUT';
+    throw new InvalidExtractionError('Extraction does not match the required schema.');
   }
-  if (candidate.cause) return getGeminiFailureStatus(candidate.cause);
-  if (candidate.error) return getGeminiFailureStatus(candidate.error);
-  return Number.isFinite(statusValue) && statusValue > 0 ? String(statusValue) : 'ERROR';
+  if (!Array.isArray(value.symptoms) || value.symptoms.some((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return true;
+    const symptom = item as Record<string, unknown>;
+    return Object.keys(symptom).some((key) =>
+      !['canonicalId', 'negated', 'timing', 'certainty', 'evidence'].includes(key)
+    ) ||
+      typeof symptom.canonicalId !== 'string' ||
+      typeof symptom.negated !== 'boolean' ||
+      (symptom.timing !== null && typeof symptom.timing !== 'string') ||
+      !['high', 'uncertain'].includes(String(symptom.certainty)) ||
+      typeof symptom.evidence !== 'string';
+  })) {
+    throw new InvalidExtractionError('Extraction contains an invalid symptom.');
+  }
+  if (!value.evidence || typeof value.evidence !== 'object' || Array.isArray(value.evidence)) {
+    throw new InvalidExtractionError('Extraction evidence is invalid.');
+  }
+  const evidence = value.evidence as Record<string, unknown>;
+  if (
+    REQUIRED_EVIDENCE_FIELDS.some((key) => !Object.prototype.hasOwnProperty.call(evidence, key)) ||
+    Object.keys(evidence).some((key) => !REQUIRED_EVIDENCE_FIELDS.includes(key)) ||
+    Object.values(evidence).some((item) => item !== null && typeof item !== 'string')
+  ) {
+    throw new InvalidExtractionError('Extraction evidence does not match the required schema.');
+  }
 }
 
-function isRetryableGeminiStatus(status: string): boolean {
-  return status === '429' || status === '503' || status === 'TIMEOUT';
+function providerStatus(error: unknown): string {
+  if (error instanceof LlmProviderError) return error.status;
+  if (!error || typeof error !== 'object') return 'NETWORK';
+  const candidate = error as { status?: unknown; code?: unknown; message?: unknown; cause?: unknown };
+  const status = Number(candidate.status ?? candidate.code);
+  if (status > 0) return String(status);
+  const text = String(candidate.message || '').toLowerCase();
+  if (/timed?\s*out|timeout|aborted/.test(text)) return 'TIMEOUT';
+  if (candidate.cause) return providerStatus(candidate.cause);
+  return 'ERROR';
 }
 
-export async function extractWithGemini(
+function retryAfterMs(error: unknown): number {
+  if (error instanceof LlmProviderError) return error.retryAfterMs;
+  if (!error || typeof error !== 'object') return 0;
+  const candidate = error as { message?: unknown; headers?: Headers; response?: { headers?: Headers } };
+  const header = candidate.response?.headers?.get('retry-after') || candidate.headers?.get('retry-after');
+  if (header && Number.isFinite(Number(header))) return Number(header) * 1000;
+  const message = String(candidate.message || '');
+  const match = message.match(/"retryDelay"\s*:\s*"([\d.]+)s"/);
+  return match ? Number(match[1]) * 1000 : 0;
+}
+
+function sanitizedProviderMessage(error: unknown, transcript: string): string {
+  let message = error instanceof Error ? error.message : 'Provider request failed.';
+  for (const secret of [process.env.LLM_API_KEY, process.env.FALLBACK_API_KEY, transcript]) {
+    if (secret) message = message.split(secret).join('[redacted]');
+  }
+  return message
+    .replace(/Bearer\s+\S+/gi, 'Bearer [redacted]')
+    .replace(/\b(?:gsk_|AIza)[A-Za-z0-9_-]{12,}\b/g, '[redacted]')
+    .replace(/\s+/g, ' ')
+    .slice(0, 180);
+}
+
+function makeDefaultAdapters(): ExtractionProviderAdapters {
+  return {
+    isConfigured: (provider) => provider === 'Gemini'
+      ? Boolean(process.env.LLM_API_KEY?.trim() && process.env.LLM_MODEL?.trim())
+      : Boolean(process.env.FALLBACK_API_KEY?.trim() && process.env.FALLBACK_BASE_URL?.trim()),
+    gemini: async (transcript, language, signal) => {
+      const apiKey = process.env.LLM_API_KEY?.trim();
+      const model = process.env.LLM_MODEL?.trim();
+      if (!apiKey || !model) {
+        throw new LlmProviderError('NOT_CONFIGURED', 'Gemini credentials or model are not configured.');
+      }
+      const ai = new GoogleGenAI({ apiKey, httpOptions: { retryOptions: { attempts: 1 } } });
+      return attemptGeminiCall(ai, transcript, language, model, signal);
+    },
+    groq: async (transcript, language, signal) => {
+      const result = await extractWithGroq({
+        transcript,
+        language,
+        schema: responseJsonSchema,
+        validate: validateExtraction,
+        signal,
+      });
+      return result.extraction;
+    },
+  };
+}
+
+export async function extractWithFallback(
   transcript: string,
-  lang: string = 'en-IN'
+  language = 'en-IN',
+  adapters: ExtractionProviderAdapters = makeDefaultAdapters()
 ): Promise<ExtractedVisitData> {
   if (process.env.LLM_PROVIDER === 'mock') {
-    return extractWithMock(transcript, lang);
-  }
-  const apiKey = process.env.LLM_API_KEY;
-  if (!apiKey) {
-    throw new Error('LLM_API_KEY is missing. Put LLM_API_KEY in the .env file in the project root, then restart the server.');
+    const extraction = extractWithMock(transcript, language);
+    extraction.extractionDiagnostics = {
+      provider: 'Rules',
+      model: 'mock',
+      failedProviders: [],
+      providerLatencyMs: { Gemini: 0, Groq: 0 },
+      totalLatencyMs: 0,
+      llmCalls: 0,
+    };
+    return extraction;
   }
 
-  const primaryModel = process.env.LLM_MODEL || DEFAULT_LLM_MODEL;
-  const backupModel = process.env.LLM_MODEL_BACKUP || DEFAULT_LLM_MODEL_BACKUP;
-  const result = await runGeminiWithResilience({
-    primaryModel,
-    backupModel,
-    invoke: async (model, _timeoutMs, signal) => {
-      const ai = new GoogleGenAI({
-        apiKey,
-        httpOptions: { retryOptions: { attempts: 1 } },
-      });
-      return attemptGeminiCall(ai, transcript, model, signal);
-    },
-  });
+  const now = adapters.now || Date.now;
+  const startedAt = now();
+  const deadline = startedAt + EXTRACTION_DEADLINE_MS;
+  const failures: ExtractionDiagnostics['failedProviders'] = [];
+  const providerLatencyMs: ExtractionDiagnostics['providerLatencyMs'] = { Gemini: 0, Groq: 0 };
+  let llmCalls = 0;
+
+  for (const provider of ['Gemini', 'Groq'] as const) {
+    if (adapters.isConfigured && !adapters.isConfigured(provider)) {
+      failures.push({ provider, status: 'NOT_CONFIGURED' });
+      continue;
+    }
+    const openUntil = providerCircuitUntil.get(provider) || 0;
+    if (openUntil > now()) {
+      failures.push({ provider, status: 'CIRCUIT_OPEN' });
+      continue;
+    }
+
+    const adapter = provider === 'Gemini' ? adapters.gemini : adapters.groq;
+    for (let invalidJsonAttempt = 0; invalidJsonAttempt < 2; invalidJsonAttempt += 1) {
+      const remaining = deadline - now();
+      if (remaining <= 0) break;
+      const attemptStarted = now();
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), Math.min(PROVIDER_ATTEMPT_TIMEOUT_MS, remaining));
+      llmCalls += 1;
+      try {
+        const extraction = await Promise.race([
+          adapter(transcript, language, controller.signal),
+          new Promise<never>((_resolve, reject) => {
+            controller.signal.addEventListener('abort', () => reject(new LlmProviderError('TIMEOUT', 'Provider request timed out.')), { once: true });
+          }),
+        ]);
+        providerLatencyMs[provider] += now() - attemptStarted;
+        const diagnostics: ExtractionDiagnostics = {
+          provider,
+          model: extraction.modelUsed,
+          failedProviders: failures,
+          providerLatencyMs,
+          totalLatencyMs: now() - startedAt,
+          llmCalls,
+        };
+        extraction.extractionDiagnostics = diagnostics;
+        extraction.llmStatus = provider === 'Gemini' && llmCalls === 1 ? 'ready' : 'retried';
+        extraction.llmRetries = llmCalls - 1;
+        extraction.llmBackupUsed = provider === 'Groq';
+        console.info(
+          `[LLM] provider=${provider} model=${diagnostics.model || 'unknown'} llm_calls=${llmCalls} total_ms=${diagnostics.totalLatencyMs}`
+        );
+        return extraction;
+      } catch (error) {
+        providerLatencyMs[provider] += now() - attemptStarted;
+        const status = providerStatus(error);
+        const message = sanitizedProviderMessage(error, transcript);
+        (adapters.logFailure || ((name, code, detail) =>
+          console.warn(`[LLM] provider=${name} status=${code} error=${detail}`)))(provider, status, message);
+        if (status === '429' || status === '503') {
+          providerCircuitUntil.set(provider, now() + Math.max(PROVIDER_COOLDOWN_MS, retryAfterMs(error)));
+          failures.push({ provider, status });
+          break;
+        }
+        if (status === 'INVALID_JSON' && invalidJsonAttempt === 0) continue;
+        failures.push({ provider, status });
+        break;
+      } finally {
+        clearTimeout(timeout);
+      }
+    }
+  }
+
+  const rules = extractWithMock(transcript, language);
+  const hasRuleData = hasExtractedData(rules);
+  const diagnostics: ExtractionDiagnostics = {
+    provider: 'Rules',
+    model: null,
+    failedProviders: failures,
+    providerLatencyMs,
+    totalLatencyMs: now() - startedAt,
+    llmCalls,
+  };
+  console.info(`[LLM] provider=Rules llm_calls=${llmCalls} total_ms=${diagnostics.totalLatencyMs}`);
+  rules.modelUsed = 'rules';
+  rules.extractionDiagnostics = diagnostics;
+  rules.llmStatus = hasRuleData ? 'retried' : 'busy';
+  if (!hasRuleData) rules.extractionStatus = 'uncertain';
+  return rules;
+}
+
+export function hasExtractedData(extraction: ExtractedVisitData): boolean {
+  return Boolean(
+    extraction.beneficiaryName ||
+    extraction.age !== null ||
+    extraction.houseNo ||
+    extraction.visitType ||
+    extraction.pregnancyMonths !== null ||
+    extraction.babyAgeDays !== null ||
+    extraction.weight !== null ||
+    extraction.bpSystolic !== null ||
+    extraction.bpDiastolic !== null ||
+    extraction.hemoglobin !== null ||
+    extraction.lastAncDate ||
+    extraction.ttStatus ||
+    extraction.ifaStatus ||
+    extraction.ifaTablets !== null ||
+    extraction.vaccinationsGiven.length ||
+    extraction.symptoms.length ||
+    extraction.notes
+  );
+}
+
+export function resetExtractionProviderState(): void {
+  providerCircuitUntil.clear();
+}
+
+export function getExtractionCircuitState(): Record<'Gemini' | 'Groq', number> {
   return {
-    ...result.value,
-    modelUsed: result.model,
-    llmStatus: result.attempts > 1 ? 'retried' : 'ready',
-    llmRetries: result.attempts - 1,
-    llmBackupUsed: result.backupUsed,
+    Gemini: providerCircuitUntil.get('Gemini') || 0,
+    Groq: providerCircuitUntil.get('Groq') || 0,
   };
 }
 
@@ -427,33 +552,41 @@ export function extractWithMock(transcript: string, _lang = 'en-IN'): ExtractedV
 async function attemptGeminiCall(
   ai: GoogleGenAI,
   transcript: string,
+  language: string,
   model: string,
   abortSignal: AbortSignal
 ): Promise<ExtractedVisitData> {
   const response = await ai.models.generateContent({
     model,
-    contents: transcript,
+    contents: `Language code: ${language}\nTranscript: ${transcript}`,
     config: {
       responseMimeType: 'application/json',
       responseJsonSchema,
-      temperature: 0.1,
+      temperature: 0,
+      ...(model.startsWith('gemini-2.5-') ? { thinkingConfig: { thinkingBudget: 0 } } : {}),
       abortSignal,
     },
   });
 
+  let parsed: unknown;
   try {
-    const parsed: unknown = JSON.parse(response.text || '');
-    return { ...validateExtraction(parsed), modelUsed: model };
+    parsed = JSON.parse(response.text || '');
   } catch {
-    throw new InvalidExtractionError('Gemini returned invalid JSON.');
+    throw new LlmProviderError('INVALID_JSON', 'Gemini returned invalid JSON.', 0, true);
+  }
+  try {
+    return { ...validateExtraction(parsed, model), modelUsed: model };
+  } catch {
+    throw new LlmProviderError('INVALID_JSON', 'Gemini returned schema-invalid JSON.', 0, true);
   }
 }
 
-export function validateExtraction(value: unknown, modelUsed = DEFAULT_LLM_MODEL): ExtractedVisitData {
+export function validateExtraction(value: unknown, modelUsed = process.env.LLM_MODEL?.trim() || 'unconfigured'): ExtractedVisitData {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new InvalidExtractionError('Gemini returned a non-object response.');
   }
   const parsed = value as Record<string, unknown>;
+  assertExtractionSchema(parsed);
   const stringOrNull = (field: string): string | null =>
     typeof parsed[field] === 'string' && parsed[field] ? parsed[field] as string : null;
   const numberOrNull = (field: string): number | null =>
@@ -545,7 +678,7 @@ export function validateExtraction(value: unknown, modelUsed = DEFAULT_LLM_MODEL
   };
 }
 
-function uncertainExtraction(modelUsed = DEFAULT_LLM_MODEL): ExtractedVisitData {
+function uncertainExtraction(modelUsed = process.env.LLM_MODEL?.trim() || 'unconfigured'): ExtractedVisitData {
   const confidence = Object.fromEntries(
     FIELD_NAMES.map((name) => [name, 'uncertain'])
   ) as ExtractedVisitData['confidence'];

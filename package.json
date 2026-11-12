@@ -9,6 +9,7 @@
     "start": "tsx server.ts",
     "preview": "tsx server.ts",
     "check": "tsx scripts/check-health.ts",
+    "check:llm": "tsx scripts/check_llm.ts",
     "test:turn": "tsx tests/turn_pipeline.test.ts",
     "test:llm": "tsx tests/gemini_resilience.test.ts",
     "clean": "rm -rf dist server.js",

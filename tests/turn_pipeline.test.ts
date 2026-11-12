@@ -94,7 +94,7 @@ async function main() {
   await casePass('10 unknown name creates once and reuses it', async () => {
     resetTurnSessions();
     const first = await turn('case-10', 'Zoya, ANC, seven months pregnant, house 89');
-    const second = await turn('case-10', 'Zoya, ANC, seven months pregnant, house 89');
+    const second = await turn('case-10', 'Zoya is at house 89 for follow-up');
     assert.equal(first.roster_label, 'synthetic/demo');
     assert.equal(second.roster_label, null);
     assert.equal(second.fields.name.value, 'Zoya');

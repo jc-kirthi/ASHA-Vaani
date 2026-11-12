@@ -8,8 +8,9 @@ import { SYNTHETIC_ROSTER } from '../src/data/rosterData.ts';
 import type { BeneficiaryRecord, DangerEngineResult, FollowupItem } from '../src/types/index.ts';
 import { decryptPayload, encryptPayload } from './crypto.ts';
 import {
-  extractWithGemini,
-  GeminiUnavailableError,
+  extractWithFallback,
+  hasExtractedData,
+  type ExtractionDiagnostics,
   type ExtractedVisitData,
 } from './extractor.ts';
 
@@ -49,11 +50,13 @@ export interface TurnResponse {
   roster_label: string | null;
   rule: string;
   llm_status: 'ready' | 'retried' | 'busy';
+  extraction_status: ExtractionDiagnostics | null;
 }
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const BENEFICIARIES_FILE = process.env.ASHA_BENEFICIARIES_FILE || path.join(ROOT, 'data', 'beneficiaries.json');
 const sessions = new Map<string, TurnSession>();
+const recentTurns = new Map<string, { startedAt: number; result: Promise<TurnResponse> }>();
 const EMPTY_FIELDS: TurnFields = Object.fromEntries([
   'name', 'age', 'beneficiaryType', 'pregnancyMonths', 'babyAgeDays', 'houseNo',
   'visitType', 'weight', 'bpSystolic', 'bpDiastolic', 'hemoglobin', 'lastAncDate',
@@ -212,14 +215,43 @@ function buildReadBack(fields: TurnFields, language: string): string {
   return `${parts.join('. ')}. ${saveText}`.trim();
 }
 
-export async function processTurn(
+export function processTurn(
   input: {
     session_id: string;
     transcript: string;
     language: string;
     corrections?: Record<string, unknown>;
   },
-  extract = extractWithGemini
+  extract = extractWithFallback
+): Promise<TurnResponse> {
+  const transcript = input.transcript.trim().replace(/\s+/g, ' ').toLocaleLowerCase();
+  if (!transcript) return processTurnOnce(input, extract);
+  const key = `${input.session_id}\u0000${transcript}`;
+  const now = Date.now();
+  for (const [oldKey, value] of recentTurns) {
+    if (now - value.startedAt > 3_000) recentTurns.delete(oldKey);
+  }
+  const duplicate = recentTurns.get(key);
+  if (duplicate && now - duplicate.startedAt <= 3_000) return duplicate.result;
+  const entry: { startedAt: number; result: Promise<TurnResponse> } = {
+    startedAt: now,
+    result: processTurnOnce(input, extract),
+  };
+  recentTurns.set(key, entry);
+  void entry.result.catch(() => {
+    if (recentTurns.get(key) === entry) recentTurns.delete(key);
+  });
+  return entry.result;
+}
+
+async function processTurnOnce(
+  input: {
+    session_id: string;
+    transcript: string;
+    language: string;
+    corrections?: Record<string, unknown>;
+  },
+  extract: (transcript: string, language?: string) => Promise<ExtractedVisitData>
 ): Promise<TurnResponse> {
   const text = input.transcript.trim();
   if (!input.session_id || (!text && !input.corrections)) {
@@ -295,38 +327,7 @@ export async function processTurn(
   } else if (pendingField === 'weight') {
     extractionText += ` weight ${text}`;
   }
-  let extracted: ExtractedVisitData;
-  try {
-    extracted = text ? await extract(extractionText, language) : emptyExtraction();
-  } catch (error) {
-    if (!(error instanceof GeminiUnavailableError)) throw error;
-    sessions.set(session.id, session);
-    const failedExtraction = {
-      ...emptyExtraction(),
-      extractionStatus: 'uncertain' as const,
-      modelUsed: error.model,
-    };
-    const retryMessage = language === 'hi-IN'
-      ? 'माफ़ कीजिए, मैं समझ नहीं पाया। कृपया एक बार फिर कहें।'
-      : language === 'kn-IN'
-        ? 'ಕ್ಷಮಿಸಿ, ನನಗೆ ಅರ್ಥವಾಗಲಿಲ್ಲ. ದಯವಿಟ್ಟು ಮತ್ತೊಮ್ಮೆ ಹೇಳಿ.'
-        : 'Sorry, I did not catch that. Please say it once more.';
-    const danger = evaluateDangerSigns(session.transcript, language);
-    return response(
-      session,
-      failedExtraction,
-      danger,
-      [retryMessage],
-      retryMessage,
-      [],
-      null,
-      null,
-      null,
-      null,
-      danger.ruleFired,
-      'busy'
-    );
-  }
+  const extracted = text ? await extract(extractionText, language) : emptyExtraction();
   mergeExtraction(session.fields, extracted, text);
 
   if (pendingField === 'houseNo' && session.duplicateCandidates.length) {
@@ -456,6 +457,20 @@ export async function processTurn(
     const announcement = rosterLabel ? `New beneficiary ${currentName} added. ` : '';
     return response(session, extracted, danger, [], `${announcement}${referralLine}`, [], record, encryptedRecord, null, rosterLabel);
   }
+  if (extracted.extractionDiagnostics?.provider === 'Rules' && !hasExtractedData(extracted)) {
+    const retryMessage = language === 'hi-IN'
+      ? 'माफ़ कीजिए, मैं समझ नहीं पाया। कृपया एक बार फिर कहें।'
+      : language === 'kn-IN'
+        ? 'ಕ್ಷಮಿಸಿ, ನನಗೆ ಅರ್ಥವಾಗಲಿಲ್ಲ. ದಯವಿಟ್ಟು ಮತ್ತೊಮ್ಮೆ ಹೇಳಿ.'
+        : 'Sorry, I did not catch that. Please say it once more.';
+    session.pendingQuestion = retryMessage;
+    session.pendingField = null;
+    sessions.set(session.id, session);
+    return response(
+      session, extracted, danger, [retryMessage], retryMessage, [],
+      null, null, null, null, danger.ruleFired, 'busy'
+    );
+  }
   if (session.pendingQuestion) {
     // Keep disambiguation questions ahead of normal required-field questions.
   } else if (danger.decision === 'ASK' && danger.clarificationQuestions.length) {
@@ -506,7 +521,7 @@ function emptyExtraction(): ExtractedVisitData {
     gestationalWeeks: null, babyAgeDays: null, childAgeDays: null, weight: null,
     bpSystolic: null, bpDiastolic: null, hemoglobin: null, lastAncDate: null,
     ttStatus: null, ttLastDoseDate: null, ifaStatus: null, ifaTablets: null, vaccinationsGiven: [], symptoms: [],
-    notes: '', evidence: {}, confidence: {}, extractionStatus: 'confirmed', modelUsed: process.env.LLM_PROVIDER === 'mock' ? 'mock' : 'gemini-3.8-flash',
+    notes: '', evidence: {}, confidence: {}, extractionStatus: 'confirmed', modelUsed: process.env.LLM_PROVIDER === 'mock' ? 'mock' : process.env.LLM_MODEL?.trim() || 'unconfigured',
   };
 }
 
@@ -542,11 +557,13 @@ function response(
     roster_label: rosterLabel,
     rule,
     llm_status: llmStatus,
+    extraction_status: extracted.extractionDiagnostics || null,
   };
 }
 
 export function resetTurnSessions(): void {
   sessions.clear();
+  recentTurns.clear();
 }
 
 export function decryptSavedTurn(token: string): Record<string, unknown> {

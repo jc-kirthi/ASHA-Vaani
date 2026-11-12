@@ -37,12 +37,20 @@ async function main() {
     hemoglobin: null,
     lastAncDate: null,
     ttStatus: null,
+    ttLastDoseDate: null,
     ifaStatus: '30 tablets given',
     ifaTablets: 30,
     vaccinationsGiven: [],
     symptoms: [],
     notes: '',
-    evidence: { weight: 'vajan 52.4 kilo', bloodPressure: 'BP 120/80' },
+    evidence: {
+      beneficiaryName: 'Sita Devi',
+      age: null,
+      houseNo: null,
+      weight: 'vajan 52.4 kilo',
+      bloodPressure: 'BP 120/80',
+      ifaStatus: '30 IFA tablets',
+    },
   });
   const flow2Pass = ext.bpSystolic === 120 && ext.weight === 52.4 && ext.ifaTablets === 30;
   console.log(`Flow 2 (Live Note -> Field Extraction Chips)     : ${flow2Pass ? 'PASS' : 'FAIL'} (BP: ${ext.bpSystolic}/${ext.bpDiastolic}, Wt: ${ext.weight}kg, IFA: ${ext.ifaTablets})`);

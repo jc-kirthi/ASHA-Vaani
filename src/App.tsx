@@ -103,6 +103,14 @@ interface PipelineTurnResponse {
   roster_label: string | null;
   rule: string;
   llm_status: 'ready' | 'retried' | 'busy';
+  extraction_status: {
+    provider: 'Gemini' | 'Groq' | 'Rules';
+    model: string | null;
+    failedProviders: Array<{ provider: 'Gemini' | 'Groq'; status: string }>;
+    providerLatencyMs: { Gemini: number; Groq: number };
+    totalLatencyMs: number;
+    llmCalls: number;
+  } | null;
 }
 
 export default function App() {
@@ -395,6 +403,7 @@ export default function App() {
         setExtractedJson({
           ...result.extracted,
           llm_status: result.llm_status,
+          extraction_status: result.extraction_status,
         });
         setDangerResult(result.danger);
         setActiveQuestion(result.questions[0] || null);
@@ -410,7 +419,12 @@ export default function App() {
           decision: result.danger.decision,
         });
         if (result.llm_status !== 'ready') {
-          addJudgeLog('LLM_RETRY', 'LLM busy, retrying', {
+          const statusMessage = result.llm_status === 'busy'
+            ? 'LLM unavailable; transcript retained'
+            : result.extraction_status?.provider === 'Rules'
+              ? 'Rule-based extraction fallback used'
+              : 'LLM fallback used';
+          addJudgeLog('LLM_RETRY', statusMessage, {
             status: result.llm_status,
             model: result.extracted.modelUsed,
           });
