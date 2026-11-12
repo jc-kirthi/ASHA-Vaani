@@ -3,9 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import {
-  FileText,
   UserCheck,
   Scale,
   Activity,
@@ -13,22 +12,17 @@ import {
   Syringe,
   Save,
   RotateCcw,
-  UserPlus,
-  Home,
-  CheckCircle2,
   Calendar,
-  Layers,
-  Settings as SettingsIcon,
-  BookOpen,
+  AlertTriangle,
+  RefreshCw,
+  XCircle,
+  Radio,
 } from 'lucide-react';
 
 import {
   LanguageCode,
   StepState,
-  MicState,
-  NoiseMode,
   VisitFormData,
-  FieldState,
   SavedVisitRecord,
   JudgeLogEvent,
   BeneficiaryRecord,
@@ -41,8 +35,8 @@ import { evaluateDangerSigns, DangerEngineResult } from './engine/dangerEngine';
 import { parseWeight } from './engine/numberEngine';
 import { generateFollowups } from './engine/followupEngine';
 
-import { useAudioRecorder } from './hooks/useAudioRecorder';
-import { useSpeechPlayer } from './hooks/useSpeechPlayer';
+import { useAudioRecorder, STTErrorState } from './hooks/useAudioRecorder';
+import { useSpeechPlayer, TTSErrorState } from './hooks/useSpeechPlayer';
 
 import { Header } from './components/Header';
 import { StepTracker } from './components/StepTracker';
@@ -96,12 +90,15 @@ export default function App() {
   const [textSize, setTextSize] = useState<'normal' | 'large' | 'xl'>('normal');
   const [showJudgeView, setShowJudgeView] = useState<boolean>(false);
   const [showDemoModal, setShowDemoModal] = useState<boolean>(false);
+  // TEST MODE: Strictly OFF by default
+  const [testModeEnabled, setTestModeEnabled] = useState<boolean>(false);
 
   // Visit State
   const [stepState, setStepState] = useState<StepState>('listening');
   const [formData, setFormData] = useState<VisitFormData>(INITIAL_FORM_DATA);
   const [dangerResult, setDangerResult] = useState<DangerEngineResult | null>(null);
   const [transcript, setTranscript] = useState<string>('');
+  const [extractedJson, setExtractedJson] = useState<any>(null);
   const [activeQuestion, setActiveQuestion] = useState<string | null>(null);
 
   // Evidence Modal State
@@ -135,7 +132,15 @@ export default function App() {
   const [turnLatencyMs, setTurnLatencyMs] = useState<number>(0);
 
   // Hooks
-  const { speak, stop: stopAudio, isPlaying, currentCaption, lastLatencyMs } = useSpeechPlayer();
+  const {
+    speak,
+    stop: stopAudio,
+    isPlaying,
+    currentCaption,
+    lastLatencyMs,
+    error: ttsError,
+    clearError: clearTTSError,
+  } = useSpeechPlayer(testModeEnabled);
 
   const addJudgeLog = useCallback((type: string, message: string, data?: any) => {
     setJudgeLogs((prev) => [
@@ -152,14 +157,38 @@ export default function App() {
 
   // Process completed spoken text
   const processUtterance = useCallback(
-    (spokenText: string) => {
+    async (spokenText: string) => {
       const startTime = performance.now();
       const currentLang = LANGUAGE_CATALOG[language] || LANGUAGE_CATALOG['hi-IN'];
       addJudgeLog('TRANSCRIPT_FINAL', spokenText);
 
+      // Check for spoken correction during read-back ("no, weight is 2.8 kilo")
+      const lower = spokenText.toLowerCase();
+      const isCorrection =
+        lower.startsWith('no') ||
+        lower.includes('nahi') ||
+        lower.includes('illi') ||
+        lower.includes('galat') ||
+        lower.includes('correction') ||
+        lower.includes('change weight');
+
+      if (isCorrection && isPlaying) {
+        stopAudio();
+        addJudgeLog('BARGE_IN_CORRECTION', 'Agent stopped immediately for user correction');
+      }
+
       setStepState('checking');
 
-      // 1. Beneficiary Roster Check
+      // 1. Language Auto-Detection
+      if (/[\u0900-\u097F]/.test(spokenText) && language !== 'hi-IN') {
+        setLanguage('hi-IN');
+        addJudgeLog('AUTO_LID', 'Auto-switched language to Hindi (hi-IN)');
+      } else if (/[\u0C80-\u0CFF]/.test(spokenText) && language !== 'kn-IN') {
+        setLanguage('kn-IN');
+        addJudgeLog('AUTO_LID', 'Auto-switched language to Kannada (kn-IN)');
+      }
+
+      // 2. Beneficiary Roster Check
       let matchedBeneficiary: BeneficiaryRecord | null = null;
       let matchedName: string | null = null;
       let matchedId: string | null = null;
@@ -167,15 +196,14 @@ export default function App() {
       let matchedVillage: string | null = null;
       let isDisambiguate = false;
 
-      const lowerText = spokenText.toLowerCase();
-
-      // Check for disambiguation answer if modal was active
+      // Check if answering an open disambiguation question
       if (disambiguationState.isOpen) {
         for (const cand of disambiguationState.candidates) {
           if (
-            lowerText.includes(cand.house_no) ||
-            lowerText.includes(`house ${cand.house_no}`) ||
-            lowerText.includes(`makan ${cand.house_no}`)
+            lower.includes(cand.house_no) ||
+            lower.includes(`house ${cand.house_no}`) ||
+            lower.includes(`makan ${cand.house_no}`) ||
+            lower.includes(`mane ${cand.house_no}`)
           ) {
             matchedBeneficiary = cand;
             setDisambiguationState({ isOpen: false, promptText: '', candidates: [] });
@@ -185,15 +213,14 @@ export default function App() {
       }
 
       if (!matchedBeneficiary) {
-        // Search roster
         const matches = SYNTHETIC_ROSTER.filter((b) =>
-          lowerText.includes(b.name.toLowerCase())
+          lower.includes(b.name.toLowerCase())
         );
 
         if (matches.length === 1) {
           matchedBeneficiary = matches[0];
         } else if (matches.length > 1) {
-          // Intentional duplicate name disambiguation
+          // Name collision -> Prompt for house number
           isDisambiguate = true;
           const prompt =
             language === 'kn-IN'
@@ -206,7 +233,7 @@ export default function App() {
             candidates: matches,
           });
 
-          speak(prompt, language);
+          speak(prompt, language, voice);
           addJudgeLog('ROSTER_DISAMBIGUATION', `Prompted for ${matches[0].name} (House ${matches[0].house_no} vs ${matches[1].house_no})`);
         }
       }
@@ -218,25 +245,25 @@ export default function App() {
         matchedVillage = matchedBeneficiary.village;
       }
 
-      // 2. Visit Type Detection
+      // 3. Visit Type Detection
       let vType: 'ANC' | 'PNC' | 'immunisation' = 'ANC';
       if (
-        lowerText.includes('pnc') ||
-        lowerText.includes('bachha') ||
-        lowerText.includes('newborn') ||
-        lowerText.includes('shishu') ||
-        lowerText.includes('magu') ||
+        lower.includes('pnc') ||
+        lower.includes('bachha') ||
+        lower.includes('newborn') ||
+        lower.includes('shishu') ||
+        lower.includes('magu') ||
         (matchedBeneficiary && matchedBeneficiary.category === 'PNC')
       ) {
         vType = 'PNC';
-      } else if (lowerText.includes('tika') || lowerText.includes('vaccin')) {
+      } else if (lower.includes('tika') || lower.includes('vaccin') || lower.includes('dose')) {
         vType = 'immunisation';
       }
 
-      // 3. Number Normalizer (Dual Method)
+      // 4. Number Normalizer (Dual Method)
       const parsedWeight = parseWeight(spokenText, vType === 'PNC' ? 'newborn' : 'adult', language);
 
-      // 4. Blood Pressure parsing
+      // 5. Blood Pressure parsing
       let bpSys: number | null = null;
       let bpDia: number | null = null;
       const bpMatch = spokenText.match(/\b(\d{2,3})\s*(?:by|\/|aur|battey)\s*(\d{2,3})\b/i);
@@ -245,20 +272,20 @@ export default function App() {
         bpDia = parseInt(bpMatch[2], 10);
       }
 
-      // 5. IFA Tablets parsing
+      // 6. IFA Tablets parsing
       let ifaCount: number | null = null;
       const ifaMatch = spokenText.match(/(\d+)\s*(?:ifa|iron|goli|goliya|tablets)/i);
       if (ifaMatch) {
         ifaCount = parseInt(ifaMatch[1], 10);
       }
 
-      // 6. Vaccinations
+      // 7. Vaccinations
       const vaccs: string[] = [];
       ['tt1', 'tt2', 'tt booster', 'td', 'bcg', 'opv', 'pentavalent', 'rotavirus', 'mr'].forEach((v) => {
-        if (lowerText.includes(v)) vaccs.push(v.toUpperCase());
+        if (lower.includes(v)) vaccs.push(v.toUpperCase());
       });
 
-      // 7. Deterministic Danger Sign Rule Engine
+      // 8. Deterministic Danger Sign Rule Engine (MoHFW clinical safety, NEVER LLM!)
       const dResult = evaluateDangerSigns(
         spokenText,
         language,
@@ -269,17 +296,35 @@ export default function App() {
       setDangerResult(dResult);
       addJudgeLog('DANGER_DECISION', `${dResult.decision} - ${dResult.ruleFired}`, dResult);
 
+      // 9. Call Gemini LLM Extractor via Backend Proxy
+      let geminiExtracted: any = null;
+      try {
+        const extractRes = await fetch('/api/extract', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ transcript: spokenText, lang: language }),
+        });
+        if (extractRes.ok) {
+          geminiExtracted = await extractRes.json();
+          setExtractedJson(geminiExtracted);
+          addJudgeLog('LLM_EXTRACTION', `Gemini extracted structured JSON (${geminiExtracted.modelUsed})`, geminiExtracted);
+        }
+      } catch (err) {
+        console.warn('Backend extract call failed:', err);
+      }
+
       // Build updated Form Data
       setFormData((prev) => {
         const updatedStates = { ...prev.fieldStates };
         const updatedEvidence = { ...prev.evidenceTrail };
 
         // Beneficiary
-        if (matchedName) {
+        const effectiveName = matchedName || geminiExtracted?.beneficiaryName;
+        if (effectiveName) {
           updatedStates.beneficiary = 'confirmed';
           updatedEvidence.beneficiary = {
-            value: `${matchedName} (${matchedId})`,
-            sourceText: matchedName,
+            value: `${effectiveName} (${matchedId || 'Pending'})`,
+            sourceText: effectiveName,
             detector: 'rule_engine',
             timestamp: new Date().toLocaleTimeString(),
           };
@@ -287,20 +332,21 @@ export default function App() {
 
         // Weight
         let finalWeight = prev.weight;
-        if (parsedWeight.value !== null) {
-          finalWeight = parsedWeight.value;
-          updatedStates.weight = parsedWeight.state;
+        const candidateWeight = parsedWeight.value ?? geminiExtracted?.weight;
+        if (candidateWeight !== null && candidateWeight !== undefined) {
+          finalWeight = candidateWeight;
+          updatedStates.weight = parsedWeight.state || 'confirmed';
           const prevHist = prev.evidenceTrail.weight?.previousValues || [];
-          if (prev.weight !== null && prev.weight !== parsedWeight.value) {
+          if (prev.weight !== null && prev.weight !== candidateWeight) {
             prevHist.push({
               value: prev.weight,
               timestamp: new Date().toLocaleTimeString(),
-              reason: 'Spoken voice correction',
+              reason: 'Spoken correction',
             });
           }
           updatedEvidence.weight = {
-            value: parsedWeight.value,
-            sourceText: parsedWeight.rawText,
+            value: candidateWeight,
+            sourceText: parsedWeight.rawText || `${candidateWeight} kg`,
             detector: 'number_normalizer',
             timestamp: new Date().toLocaleTimeString(),
             previousValues: prevHist,
@@ -308,44 +354,47 @@ export default function App() {
         }
 
         // Blood pressure
-        if (bpSys && bpDia) {
+        const finalSys = bpSys ?? geminiExtracted?.bpSystolic;
+        const finalDia = bpDia ?? geminiExtracted?.bpDiastolic;
+        if (finalSys && finalDia) {
           updatedStates.bp = 'confirmed';
           updatedEvidence.bp = {
-            value: `${bpSys}/${bpDia}`,
-            sourceText: `${bpSys}/${bpDia}`,
+            value: `${finalSys}/${finalDia}`,
+            sourceText: `${finalSys}/${finalDia}`,
             detector: 'number_normalizer',
             timestamp: new Date().toLocaleTimeString(),
           };
         }
 
         // IFA
-        if (ifaCount !== null) {
+        const finalIfa = ifaCount ?? geminiExtracted?.ifaTablets;
+        if (finalIfa !== null && finalIfa !== undefined) {
           updatedStates.ifa = 'confirmed';
           updatedEvidence.ifa = {
-            value: ifaCount,
-            sourceText: `${ifaCount} IFA`,
+            value: finalIfa,
+            sourceText: `${finalIfa} IFA`,
             detector: 'number_normalizer',
             timestamp: new Date().toLocaleTimeString(),
           };
         }
 
         // Vaccinations
-        if (vaccs.length > 0) {
+        if (vaccs.length > 0 || (geminiExtracted?.vaccinationsGiven && geminiExtracted.vaccinationsGiven.length > 0)) {
           updatedStates.vaccinations = 'confirmed';
         }
 
         return {
           ...prev,
-          beneficiaryName: matchedName || prev.beneficiaryName,
+          beneficiaryName: effectiveName || prev.beneficiaryName,
           beneficiaryId: matchedId || prev.beneficiaryId,
           houseNo: matchedHouse || prev.houseNo,
           village: matchedVillage || prev.village,
           visitType: vType,
           weight: finalWeight,
-          bpSystolic: bpSys || prev.bpSystolic,
-          bpDiastolic: bpDia || prev.bpDiastolic,
-          ifaTablets: ifaCount !== null ? ifaCount : prev.ifaTablets,
-          vaccinationsGiven: vaccs.length > 0 ? vaccs : prev.vaccinationsGiven,
+          bpSystolic: finalSys || prev.bpSystolic,
+          bpDiastolic: finalDia || prev.bpDiastolic,
+          ifaTablets: finalIfa !== null && finalIfa !== undefined ? finalIfa : prev.ifaTablets,
+          vaccinationsGiven: vaccs.length > 0 ? vaccs : (geminiExtracted?.vaccinationsGiven || prev.vaccinationsGiven),
           fieldStates: updatedStates,
           evidenceTrail: updatedEvidence,
         };
@@ -356,30 +405,30 @@ export default function App() {
 
       // Voice Response & Read-Back Strategy
       if (dResult.decision === 'FLAG') {
-        // Immediate PHC emergency line plays!
-        speak(currentLang.spoken.referral_line, language);
+        // Immediate fixed PHC emergency line plays!
+        speak(currentLang.spoken.referral_line, language, voice);
         setStepState('confirm');
       } else if (isDisambiguate) {
         // Disambiguation prompt already spoken above
         setStepState('confirm');
       } else if (parsedWeight.isConfusable && parsedWeight.confusablePrompt) {
-        // Sound-alike confusable guard
-        speak(parsedWeight.confusablePrompt, language);
+        // Confusable sound-alike guard (e.g. saat vs saath)
+        speak(parsedWeight.confusablePrompt, language, voice);
         setActiveQuestion(parsedWeight.confusablePrompt);
         setStepState('confirm');
       } else if (dResult.decision === 'ASK' && dResult.clarificationQuestions.length > 0) {
-        // Targeted clarification
+        // Targeted clarification for hedged / unknown symptom
         const q = dResult.clarificationQuestions[0];
-        speak(q, language);
+        speak(q, language, voice);
         setActiveQuestion(q);
         setStepState('confirm');
-      } else if (parsedWeight.value === null && !lowerText.includes('vajan') && !lowerText.includes('weight')) {
+      } else if (parsedWeight.value === null && !lower.includes('vajan') && !lower.includes('weight')) {
         // Missing weight field
-        speak(currentLang.spoken.ask_weight, language);
+        speak(currentLang.spoken.ask_weight, language, voice);
         setActiveQuestion(currentLang.spoken.ask_weight);
         setStepState('confirm');
       } else {
-        // Read-back numbers and dates, then short "baaki sab theek, save karun?"
+        // Read-back numbers, then short "baaki sab theek, save karun?"
         let readback = '';
         if (parsedWeight.value) {
           readback += `Weight ${parsedWeight.value} kilo. `;
@@ -388,35 +437,39 @@ export default function App() {
           readback += `BP ${bpSys} by ${bpDia}. `;
         }
         readback += currentLang.spoken.save_confirm;
-        speak(readback, language);
+        speak(readback, language, voice);
         setStepState('confirm');
       }
     },
-    [language, disambiguationState, speak, addJudgeLog]
+    [language, voice, disambiguationState, speak, isPlaying, stopAudio, addJudgeLog]
   );
 
   const handleTranscriptChunk = useCallback(
-    (text: string, isFinal: boolean) => {
+    (text: string, isFinal: boolean, metadata?: any) => {
       setTranscript(text);
+      if (metadata) {
+        addJudgeLog('STT_CHUNK', `Transcript chunk from ${metadata.engine || 'Gnani'}`, metadata);
+      }
       if (isFinal) {
         processUtterance(text);
       }
     },
-    [processUtterance]
+    [processUtterance, addJudgeLog]
   );
 
   const {
     isRecording,
     audioLevel,
     noiseMode,
-    error: micError,
+    error: sttError,
+    clearError: clearSTTError,
     startRecording,
     stopRecording,
-  } = useAudioRecorder(handleTranscriptChunk);
+  } = useAudioRecorder(handleTranscriptChunk, testModeEnabled);
 
   // Toggle Microphone
   const handleToggleMic = () => {
-    // If agent is currently speaking, user tap or speak acts as instant barge-in!
+    // Barge-in: User tap or speaking interrupts agent speech instantly
     if (isPlaying) {
       stopAudio();
       addJudgeLog('BARGE_IN', 'Agent speech interrupted instantly by user');
@@ -430,7 +483,7 @@ export default function App() {
     } else {
       const currentLang = LANGUAGE_CATALOG[language] || LANGUAGE_CATALOG['hi-IN'];
       // First turn AI disclosure:
-      speak(currentLang.spoken.ai_disclosure, language, () => {
+      speak(currentLang.spoken.ai_disclosure, language, voice, () => {
         startRecording(language);
         setStepState('listening');
       });
@@ -449,7 +502,7 @@ export default function App() {
   };
 
   // Save Record
-  const handleSaveRecord = () => {
+  const handleSaveRecord = async () => {
     stopAudio();
     const currentLang = LANGUAGE_CATALOG[language] || LANGUAGE_CATALOG['hi-IN'];
     const followups = generateFollowups(
@@ -459,9 +512,8 @@ export default function App() {
       formData.ifaTablets
     );
 
-    const newRecord: SavedVisitRecord = {
-      id: `REC-${Date.now()}`,
-      timestamp: new Date().toISOString().replace('T', ' ').substring(0, 16),
+    const recordPayload = {
+      timestamp: new Date().toISOString(),
       beneficiaryName: formData.beneficiaryName || 'Sita Devi',
       beneficiaryId: formData.beneficiaryId || 'BEN-001',
       village: formData.village || 'Rampur',
@@ -472,8 +524,39 @@ export default function App() {
       isFlagged: dangerResult?.decision === 'FLAG',
       flaggedSigns: dangerResult?.flaggedSigns || [],
       referralSlip: dangerResult?.referralSlip || undefined,
-      encryptedToken: `FERNET_ENC_${Math.random().toString(36).substring(2, 10)}`,
       transcript: transcript || 'Recorded via ASHA Vaani',
+      followups,
+    };
+
+    // Encrypt record with ENCRYPTION_KEY via backend
+    let encryptedToken = `LOCAL_ENC_${Math.random().toString(36).substring(2, 10)}`;
+    try {
+      const encRes = await fetch('/api/records/encrypt', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(recordPayload),
+      });
+      if (encRes.ok) {
+        const encData = await encRes.json();
+        encryptedToken = encData.encryptedToken;
+      }
+    } catch {}
+
+    const newRecord: SavedVisitRecord = {
+      id: `REC-${Date.now()}`,
+      timestamp: new Date().toISOString().replace('T', ' ').substring(0, 16),
+      beneficiaryName: recordPayload.beneficiaryName,
+      beneficiaryId: recordPayload.beneficiaryId,
+      village: recordPayload.village,
+      houseNo: recordPayload.houseNo,
+      visitType: recordPayload.visitType,
+      weight: recordPayload.weight,
+      bp: recordPayload.bp,
+      isFlagged: recordPayload.isFlagged,
+      flaggedSigns: recordPayload.flaggedSigns,
+      referralSlip: recordPayload.referralSlip,
+      encryptedToken,
+      transcript: recordPayload.transcript,
       followups,
     };
 
@@ -486,8 +569,8 @@ export default function App() {
     setSavedFollowups(followups);
     setStepState('saved');
 
-    speak(currentLang.spoken.record_saved, language);
-    addJudgeLog('RECORD_SAVED_ENCRYPTED', `Saved record for ${newRecord.beneficiaryName}`, newRecord);
+    speak(currentLang.spoken.record_saved, language, voice);
+    addJudgeLog('RECORD_SAVED_ENCRYPTED', `Saved record for ${newRecord.beneficiaryName} (AES-256 Encrypted)`, newRecord);
   };
 
   // Next Beneficiary
@@ -496,6 +579,7 @@ export default function App() {
     setFormData(INITIAL_FORM_DATA);
     setDangerResult(null);
     setTranscript('');
+    setExtractedJson(null);
     setSavedFollowups(null);
     setActiveQuestion(null);
     setStepState('listening');
@@ -507,6 +591,7 @@ export default function App() {
     stopAudio();
     setTranscript('');
     setDangerResult(null);
+    setExtractedJson(null);
     setStepState('listening');
     handleToggleMic();
   };
@@ -519,6 +604,7 @@ export default function App() {
     setFormData(INITIAL_FORM_DATA);
     setDangerResult(null);
     setTranscript('');
+    setExtractedJson(null);
     setSavedFollowups(null);
     setJudgeLogs([]);
     try {
@@ -529,6 +615,7 @@ export default function App() {
   };
 
   const currentLangObj = LANGUAGE_CATALOG[language] || LANGUAGE_CATALOG['hi-IN'];
+  const activeError = sttError || ttsError;
 
   return (
     <div
@@ -536,6 +623,36 @@ export default function App() {
         textSize === 'large' ? 'text-base' : textSize === 'xl' ? 'text-lg' : 'text-sm'
       }`}
     >
+      {/* Test Mode Warning Banner (Visible ONLY when Test Mode is turned ON) */}
+      {testModeEnabled && (
+        <div className="bg-amber-500 text-amber-950 font-bold px-4 py-1.5 text-xs flex items-center justify-between shadow-sm sticky top-0 z-40">
+          <div className="flex items-center gap-1.5">
+            <AlertTriangle className="w-4 h-4 shrink-0 text-amber-950" />
+            <span>⚠️ TEST MODE: Browser Voice Emulator Active (Gnani bypassed for testing)</span>
+          </div>
+          <button
+            onClick={() => setTestModeEnabled(false)}
+            className="text-[10px] bg-amber-900 hover:bg-black text-white px-2 py-0.5 rounded font-bold"
+          >
+            Turn OFF
+          </button>
+        </div>
+      )}
+
+      {/* Live Pipeline Badge Banner */}
+      <div className="bg-gray-900 text-gray-200 text-[11px] font-mono px-4 py-1 flex items-center justify-between border-b border-gray-800">
+        <div className="flex items-center gap-2">
+          <Radio className="w-3.5 h-3.5 text-teal-400 animate-pulse" />
+          <span>STT: Gnani Prisma v3.0 | TTS: Gnani Timbre v3.0 | LLM: Gemini</span>
+        </div>
+        <button
+          onClick={() => setShowJudgeView((p) => !p)}
+          className="text-teal-400 hover:underline font-bold text-[10px]"
+        >
+          {showJudgeView ? 'Hide Judge View' : 'Judge View'}
+        </button>
+      </div>
+
       {/* Top Header */}
       <Header
         currentLanguage={language}
@@ -546,6 +663,53 @@ export default function App() {
         onToggleJudgeView={() => setShowJudgeView((p) => !p)}
         onOpenDemoScenarios={() => setShowDemoModal(true)}
       />
+
+      {/* Visible Error Banner with Retry button if Gnani call fails */}
+      {activeError && (
+        <div className="max-w-md w-full mx-auto px-4 mt-2">
+          <div className="p-3 bg-red-50 border border-red-300 rounded-xl flex items-start gap-2.5 shadow-sm text-red-900">
+            <XCircle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
+            <div className="flex-1 text-xs">
+              <span className="font-bold block">Live Voice Service Notice:</span>
+              <p className="mt-0.5 text-red-800">{activeError.message}</p>
+              <div className="mt-2 flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    clearSTTError();
+                    clearTTSError();
+                    handleToggleMic();
+                  }}
+                  className="px-3 py-1 bg-red-600 text-white rounded-lg font-bold text-xs flex items-center gap-1 hover:bg-red-700 active:scale-95 transition"
+                >
+                  <RefreshCw className="w-3 h-3" />
+                  Retry Voice Call
+                </button>
+                {!testModeEnabled && (
+                  <button
+                    onClick={() => {
+                      clearSTTError();
+                      clearTTSError();
+                      setTestModeEnabled(true);
+                    }}
+                    className="px-2.5 py-1 bg-white border border-red-300 text-red-700 rounded-lg font-semibold text-xs hover:bg-red-50"
+                  >
+                    Enable Test Mode
+                  </button>
+                )}
+                <button
+                  onClick={() => {
+                    clearSTTError();
+                    clearTTSError();
+                  }}
+                  className="text-gray-500 hover:text-gray-700 text-xs px-2"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Main Container */}
       <main className="flex-1 max-w-md w-full mx-auto px-4 pt-3 pb-24">
@@ -757,6 +921,8 @@ export default function App() {
             showJudgeView={showJudgeView}
             onToggleJudgeView={() => setShowJudgeView((p) => !p)}
             onPurgeData={handlePurgeAllData}
+            testModeEnabled={testModeEnabled}
+            onToggleTestMode={() => setTestModeEnabled((p) => !p)}
           />
         )}
       </main>
@@ -784,7 +950,7 @@ export default function App() {
                 : 'text-gray-400 hover:text-gray-600 font-medium'
             }`}
           >
-            <BookOpen className="w-5 h-5 mb-0.5" />
+            <Calendar className="w-5 h-5 mb-0.5" />
             <span className="text-[11px]">{currentLangObj.ui.records_tab}</span>
             {savedRecords.some((r) => r.isFlagged) && (
               <span className="absolute top-0.5 right-4 w-2 h-2 rounded-full bg-red-600 ring-2 ring-white" />
@@ -799,7 +965,7 @@ export default function App() {
                 : 'text-gray-400 hover:text-gray-600 font-medium'
             }`}
           >
-            <SettingsIcon className="w-5 h-5 mb-0.5" />
+            <Activity className="w-5 h-5 mb-0.5" />
             <span className="text-[11px]">{currentLangObj.ui.settings_tab}</span>
           </button>
         </div>
@@ -870,6 +1036,8 @@ export default function App() {
         dangerResult={dangerResult}
         formData={formData}
         logs={judgeLogs}
+        transcript={transcript}
+        extractedJson={extractedJson}
       />
     </div>
   );

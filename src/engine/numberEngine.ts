@@ -1,4 +1,4 @@
-import { FieldState } from '../types';
+import { FieldState } from '../types/index.ts';
 
 export interface NumberParseResult {
   value: number | null;

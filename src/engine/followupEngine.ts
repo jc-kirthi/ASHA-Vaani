@@ -1,4 +1,4 @@
-import { FollowupItem } from '../types';
+import { FollowupItem } from '../types/index.ts';
 
 export function generateFollowups(
   visitType: string = 'ANC',

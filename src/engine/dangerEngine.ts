@@ -1,4 +1,4 @@
-import { DangerSignAlert, DangerEngineResult } from '../types';
+import { DangerSignAlert, DangerEngineResult } from '../types/index.ts';
 export type { DangerEngineResult };
 
 export const DANGER_SIGNS_LIST = [
@@ -36,7 +36,7 @@ export const DANGER_SIGNS_LIST = [
       version: '[TODO: NHM 2020 Revision]',
       section_or_page: '[TODO: Section 4.2, Page 36]',
     },
-    synonyms: ['dhundhla', 'blurred vision', 'tez sar dard', 'kannu mabbaguvudu'],
+    synonyms: ['dhundhla', 'blurred vision', 'tez sar dard', 'kannu mabbaguvudu', 'mabbaguvudu'],
   },
   {
     id: 'high_fever_pregnancy',
@@ -48,7 +48,7 @@ export const DANGER_SIGNS_LIST = [
       version: '[TODO: MoHFW 2019]',
       section_or_page: '[TODO: Chapter 5, Page 52]',
     },
-    synonyms: ['tez bukhar', 'high fever', 'tumba jwara', 'taap', 'taav', 'jor', 'paniyum'],
+    synonyms: ['tez bukhar', 'high fever', 'tumba jwara', 'taap', 'taav', 'jor', 'paniyum', 'bukhar', 'fever', 'jwara'],
   },
   {
     id: 'severe_abdominal_pain',
@@ -60,7 +60,7 @@ export const DANGER_SIGNS_LIST = [
       version: '[TODO: NHM 2020]',
       section_or_page: '[TODO: Section 3.5, Page 31]',
     },
-    synonyms: ['pet mein tez dard', 'severe abdominal pain', 'hotte tumba novu'],
+    synonyms: ['pet mein tez dard', 'severe abdominal pain', 'hotte tumba novu', 'pet dard', 'hottenovu'],
   },
   {
     id: 'reduced_fetal_movement',
@@ -72,7 +72,7 @@ export const DANGER_SIGNS_LIST = [
       version: '[TODO: MCP Card 2021]',
       section_or_page: '[TODO: Page 8, Fetal Monitoring]',
     },
-    synonyms: ['bachha hil nahi raha', 'movement kam', 'reduced fetal movement', 'chalane illa'],
+    synonyms: ['bachha hil nahi raha', 'movement kam', 'reduced fetal movement', 'chalane illa', 'bachha hil', 'fetal movement'],
   },
   {
     id: 'newborn_fever',
@@ -96,7 +96,7 @@ export const DANGER_SIGNS_LIST = [
       version: '[TODO: HBNC 2021]',
       section_or_page: '[TODO: Chapter 4, Cold Injury, Page 22]',
     },
-    synonyms: ['thanda pad gaya', 'sharir thanda', 'cold body', 'hypothermia'],
+    synonyms: ['thanda pad gaya', 'sharir thanda', 'cold body', 'hypothermia', 'cold like ice'],
   },
   {
     id: 'newborn_not_feeding',
@@ -120,7 +120,7 @@ export const DANGER_SIGNS_LIST = [
       version: '[TODO: HBNC 2021]',
       section_or_page: '[TODO: Page 27, Respiratory Count > 60/min]',
     },
-    synonyms: ['pasli chal', 'saans tez', 'chhati dhas', 'fast breathing', 'saah tez'],
+    synonyms: ['pasli chal', 'saans tez', 'chhati dhas', 'fast breathing', 'saah tez', 'tez saans'],
   },
   {
     id: 'yellow_palms_soles',
@@ -144,7 +144,7 @@ export const DANGER_SIGNS_LIST = [
       version: '[TODO: HBNC 2021]',
       section_or_page: '[TODO: Page 33, Activity Check]',
     },
-    synonyms: ['sust pad gaya', 'harkat nahi kar raha', 'unresponsive', 'lethargic'],
+    synonyms: ['sust pad gaya', 'harkat nahi kar raha', 'unresponsive', 'lethargic', 'sust'],
   },
 ];
 
@@ -165,13 +165,13 @@ export function evaluateDangerSigns(
   const evidence: Array<{ signId: string; name: string; state: string; reason: string }> = [];
 
   // Temporal transitional positive: was absent before, active NOW -> FLAG
-  const transPosRegex = /(nahi (thi|tha|rahi).*(ab (ho rahi|hai|shuru))|pehle nahi.*ab|didn't have.*(now|started)|no.*earlier.*now.*(started|active|bleeding)|irallilla.*ivaga (ide|aaguttide))/i;
+  const transPosRegex = /(pehle.*nahi.*ab|kal.*nahi.*aaj|nahi.*shuru|nahi (thi|tha|rahi|ittu).*ab|didn't have.*(now|started)|did not have.*(now|started)|no.*earlier.*now.*(started|active|bleeding)|irallilla.*ivaga (ide|aaguttide)|munche.*irallilla.*ivaga)/i;
   // Temporal transitional negative: was present earlier, NOT present NOW -> CLEAR
-  const transNegRegex = /(pehle (thi|tha|hua tha).*ab (nahi|band|theek)|(had|was).*earlier.*now.*(no|none|not|stopped|cured)|earlier.*now.*stopped|(ittu|itthu).*ivaga (illa|nillide))/i;
-  // Hedged / doubtful: -> ASK
-  const hedgeRegex = /(thoda.*jaisa|jaisa laga|doubtful|shakk hai|maybe|anusthide|suspected)/i;
+  const transNegRegex = /(pehle.*(thi|tha|hua tha).*ab (nahi|band|theek)|(had|was).*earlier.*now.*(no|none|not|stopped|cured)|earlier.*now.*stopped|(ittu|itthu).*ivaga (illa|nillide)|modalu.*ivaga illa)/i;
   // Unknown: -> ASK
   const unknownRegex = /(bataya nahi|pata nahi|did not mention|not reported)/i;
+  // Hedged / doubtful: -> ASK
+  const hedgeRegex = /(thoda.*jaisa|jaisa laga|doubtful|shakk hai|maybe|anusthide)/i;
   // Present negation
   const negRegex = /\b(nahi|bilkul nahi|no|not|none|illa|aguttilla|ledu|illai|nei|nathi)\b/i;
 
@@ -198,13 +198,17 @@ export function evaluateDangerSigns(
       evidence.push({ signId: sign.id, name: sign.name, state: 'FLAG', reason: 'Transition to active present state' });
     } else if (transNegRegex.test(t)) {
       evidence.push({ signId: sign.id, name: sign.name, state: 'CLEAR', reason: 'Past episode resolved, currently absent' });
-    } else if (hedgeRegex.test(t)) {
-      clarificationQuestions.push(`क्या लाभार्थी को ${sign.name} (खतरे का लक्षण) की शिकायत अभी है? कृपया हाँ या ना कहें।`);
-      evidence.push({ signId: sign.id, name: sign.name, state: 'ASK', reason: 'Hedged / uncertain symptom' });
     } else if (unknownRegex.test(t)) {
       clarificationQuestions.push(`क्या लाभार्थी को ${sign.name} (खतरे का लक्षण) है? कृपया हाँ या ना बताएं।`);
       evidence.push({ signId: sign.id, name: sign.name, state: 'ASK', reason: 'Status unknown / not reported' });
-    } else if (negRegex.test(t)) {
+    } else if (hedgeRegex.test(t)) {
+      clarificationQuestions.push(`क्या लाभार्थी को ${sign.name} (खतरे का लक्षण) की शिकायत अभी है? कृपया हाँ या ना कहें।`);
+      evidence.push({ signId: sign.id, name: sign.name, state: 'ASK', reason: 'Hedged / uncertain symptom' });
+    } else if (
+      (t.includes('not lethargic') || t.includes('sust nahi') || (sign.id !== 'newborn_not_feeding' && sign.id !== 'reduced_fetal_movement' && !t.includes('harkat nahi'))) &&
+      negRegex.test(t)
+    ) {
+      // Direct present negation verified (excluding refusal-to-feed and no-movement where "nahi" is the danger symptom)
       evidence.push({ signId: sign.id, name: sign.name, state: 'CLEAR', reason: 'Direct present negation verified' });
     } else {
       // Unnegated danger sign detected -> Must FLAG!

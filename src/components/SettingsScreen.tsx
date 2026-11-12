@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Globe2, Mic2, Type, Cpu, Trash2, ShieldCheck, Check, AlertTriangle } from 'lucide-react';
+import { Globe2, Mic2, Type, Cpu, Trash2, ShieldCheck, Check, AlertTriangle, Radio } from 'lucide-react';
 import { LanguageCode } from '../types';
 import { LANGUAGE_CATALOG } from '../data/languageData';
 
@@ -13,6 +13,8 @@ interface SettingsScreenProps {
   showJudgeView: boolean;
   onToggleJudgeView: () => void;
   onPurgeData: () => void;
+  testModeEnabled?: boolean;
+  onToggleTestMode?: () => void;
 }
 
 const STOCK_VOICES = [
@@ -33,6 +35,8 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
   showJudgeView,
   onToggleJudgeView,
   onPurgeData,
+  testModeEnabled = false,
+  onToggleTestMode,
 }) => {
   const [showPurgeConfirm, setShowPurgeConfirm] = useState(false);
   const [purgeDone, setPurgeDone] = useState(false);
@@ -46,6 +50,38 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
 
   return (
     <div className="space-y-4 pb-20 text-gray-800">
+      {/* Test Mode Banner if active */}
+      {testModeEnabled && (
+        <div className="p-3 bg-amber-500 text-amber-950 font-bold text-xs rounded-xl border border-amber-600 flex items-center justify-between shadow-xs">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 shrink-0 text-amber-950" />
+            <span>TEST MODE ACTIVE: Browser voice emulator running (Gnani bypassed for testing).</span>
+          </div>
+          {onToggleTestMode && (
+            <button
+              onClick={onToggleTestMode}
+              className="px-2 py-1 bg-amber-900 text-white text-[10px] rounded font-bold hover:bg-black"
+            >
+              Turn OFF
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Model & Voice Pipeline Card */}
+      <div className="p-4 bg-white rounded-2xl border border-teal-200 shadow-2xs space-y-2">
+        <div className="flex items-center gap-2 text-teal-800 font-bold text-sm">
+          <Radio className="w-5 h-5 text-teal-600 animate-pulse" />
+          <span>Active Pipeline Architecture</span>
+        </div>
+        <div className="p-2.5 bg-teal-50/70 rounded-xl text-xs space-y-1 text-teal-950">
+          <div><span className="font-bold">STT:</span> Gnani Prisma v3.0 (streaming WebSocket)</div>
+          <div><span className="font-bold">TTS:</span> Gnani Timbre v3.0 (streaming WebSocket)</div>
+          <div><span className="font-bold">Extractor:</span> Gemini 2.5 Flash (strict RFC 8259 JSON)</div>
+          <div><span className="font-bold">Safety Rules:</span> Deterministic MoHFW Clinical Engine</div>
+        </div>
+      </div>
+
       {/* Language Selector Section */}
       <div className="p-4 bg-white rounded-2xl border border-gray-200 shadow-2xs space-y-3">
         <div className="flex items-center gap-2 text-teal-800">
@@ -101,7 +137,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
           <div>
             <h3 className="text-sm font-bold text-gray-900">Timbre v3.0 Stock Voice</h3>
             <p className="text-xs text-gray-500">
-              No voice cloning of real persons; all stock voices speak all 10 languages
+              Official Timbre v3.0 voices (every voice speaks all 10 languages)
             </p>
           </div>
         </div>
@@ -154,6 +190,36 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
         </div>
       </div>
 
+      {/* Optional Test Mode (OFF by default) */}
+      <div className="p-4 bg-white rounded-2xl border border-gray-200 shadow-2xs flex items-center justify-between">
+        <div className="flex items-center gap-2.5 pr-2">
+          <div className={`p-2 rounded-xl ${testModeEnabled ? 'bg-amber-100 text-amber-800' : 'bg-gray-100 text-gray-600'}`}>
+            <AlertTriangle className="w-5 h-5" />
+          </div>
+          <div>
+            <h3 className="text-sm font-bold text-gray-900">Browser Emulator Test Mode</h3>
+            <p className="text-xs text-gray-500">
+              OFF by default. Turn ON only to simulate voice locally without live Gnani credentials.
+            </p>
+          </div>
+        </div>
+
+        {onToggleTestMode && (
+          <button
+            onClick={onToggleTestMode}
+            className={`w-12 h-6 rounded-full transition relative shrink-0 ${
+              testModeEnabled ? 'bg-amber-500' : 'bg-gray-300'
+            }`}
+          >
+            <span
+              className={`absolute top-1 w-4 h-4 rounded-full bg-white transition transform ${
+                testModeEnabled ? 'left-7' : 'left-1'
+              }`}
+            />
+          </button>
+        )}
+      </div>
+
       {/* Judge View Setting */}
       <div className="p-4 bg-white rounded-2xl border border-gray-200 shadow-2xs flex items-center justify-between">
         <div className="flex items-center gap-2.5">
@@ -168,7 +234,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
 
         <button
           onClick={onToggleJudgeView}
-          className={`w-12 h-6 rounded-full transition relative ${
+          className={`w-12 h-6 rounded-full transition relative shrink-0 ${
             showJudgeView ? 'bg-purple-600' : 'bg-gray-300'
           }`}
         >
