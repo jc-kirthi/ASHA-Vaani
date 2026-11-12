@@ -11,6 +11,7 @@ import { encryptPayload, decryptPayload } from './server/crypto.ts';
 import { evaluateDangerSigns } from './src/engine/dangerEngine.ts';
 import { parseWeight } from './src/engine/numberEngine.ts';
 import type { BeneficiaryRecord } from './src/types/index.ts';
+import { processTurn } from './server/turn.ts';
 
 const app = express();
 const server = http.createServer(app);
@@ -110,7 +111,25 @@ app.get('/api/config', (req, res) => {
     llmModel: 'gemini-2.5-flash',
     sttEndpoint: 'wss://api.vachana.ai/stt/v3/stream',
     ttsEndpoint: 'wss://api.vachana.ai/api/v1/tts',
+    testMode: process.env.LLM_PROVIDER === 'mock',
   });
+});
+
+app.post('/api/turn', async (req, res) => {
+  const { session_id, transcript, language } = req.body;
+  if (
+    typeof session_id !== 'string' || !session_id.trim() ||
+    typeof transcript !== 'string' || !transcript.trim() ||
+    typeof language !== 'string'
+  ) {
+    return res.status(400).json({ error: 'session_id, transcript, and language are required.' });
+  }
+  try {
+    res.json(await processTurn({ session_id, transcript, language }));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Visit turn processing failed.';
+    res.status(502).json({ error: message, canRetry: true });
+  }
 });
 
 // LLM Entity Extractor API
@@ -235,7 +254,7 @@ wssSTT.on('connection', (clientWs: WebSocket, request: any, url: any) => {
       JSON.stringify({
         type: 'error',
         error_code: 'MISSING_API_KEY',
-        message: 'GNANI_API_KEY is missing. Set GNANI_API_KEY in the .env file in the project root, then restart the backend.',
+        message: 'GNANI_API_KEY is missing. Put GNANI_API_KEY in the .env file in the project root, then restart the server.',
       })
     );
     clientWs.close();

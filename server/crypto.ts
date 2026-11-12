@@ -7,7 +7,7 @@ import crypto from 'crypto';
 function getKey(): Buffer {
   const raw = process.env.ENCRYPTION_KEY;
   if (!raw) {
-    throw new Error('ENCRYPTION_KEY is missing. Set ENCRYPTION_KEY in the .env file in the project root, then restart the backend.');
+    throw new Error('ENCRYPTION_KEY is missing. Put ENCRYPTION_KEY in the .env file in the project root, then restart the server.');
   }
   // Derive a 32-byte key using SHA-256
   return crypto.createHash('sha256').update(raw).digest();

@@ -27,7 +27,7 @@ export async function synthesizeTimbreV3(
 ): Promise<{ audioBase64: string; timeToFirstAudioMs: number; cached: boolean }> {
   const apiKey = process.env.GNANI_API_KEY;
   if (!apiKey) {
-    throw new Error('GNANI_API_KEY is missing. Set GNANI_API_KEY in the .env file in the project root, then restart the backend.');
+    throw new Error('GNANI_API_KEY is missing. Put GNANI_API_KEY in the .env file in the project root, then restart the server.');
   }
 
   const voice = req.voice || 'Shivani';

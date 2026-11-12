@@ -19,6 +19,7 @@ export interface ExtractedVisitData {
   hemoglobin: number | null;
   lastAncDate: string | null;
   ttStatus: string | null;
+  ttLastDoseDate: string | null;
   ifaStatus: string | null;
   ifaTablets: number | null;
   vaccinationsGiven: string[];
@@ -43,7 +44,7 @@ const responseJsonSchema = {
     'beneficiaryName', 'beneficiaryNames', 'beneficiaryType', 'age', 'houseNo',
     'village', 'visitType', 'pregnancyMonths', 'gestationalWeeks', 'babyAgeDays',
     'weight', 'bpSystolic', 'bpDiastolic', 'hemoglobin', 'lastAncDate',
-    'ttStatus', 'ifaStatus', 'ifaTablets', 'vaccinationsGiven', 'symptoms',
+    'ttStatus', 'ttLastDoseDate', 'ifaStatus', 'ifaTablets', 'vaccinationsGiven', 'symptoms',
     'notes', 'evidence',
   ],
   properties: {
@@ -63,6 +64,7 @@ const responseJsonSchema = {
     hemoglobin: { type: ['number', 'null'] },
     lastAncDate: { type: ['string', 'null'] },
     ttStatus: { type: ['string', 'null'] },
+    ttLastDoseDate: { type: ['string', 'null'] },
     ifaStatus: { type: ['string', 'null'] },
     ifaTablets: { type: ['number', 'null'] },
     vaccinationsGiven: { type: 'array', items: { type: 'string' } },
@@ -107,11 +109,14 @@ class InvalidExtractionError extends Error {}
 
 export async function extractWithGemini(
   transcript: string,
-  _lang: string = 'en-IN'
+  lang: string = 'en-IN'
 ): Promise<ExtractedVisitData> {
+  if (process.env.LLM_PROVIDER === 'mock') {
+    return extractWithMock(transcript, lang);
+  }
   const apiKey = process.env.LLM_API_KEY;
   if (!apiKey) {
-    throw new Error('LLM_API_KEY is missing. Set LLM_API_KEY in the .env file in the project root, then restart the backend.');
+    throw new Error('LLM_API_KEY is missing. Put LLM_API_KEY in the .env file in the project root, then restart the server.');
   }
 
   const ai = new GoogleGenAI({ apiKey });
@@ -129,6 +134,146 @@ export async function extractWithGemini(
     return uncertainExtraction();
   }
   throw new Error('Gemini extraction failed.');
+}
+
+export function extractWithMock(transcript: string, _lang = 'en-IN'): ExtractedVisitData {
+  const text = transcript.trim();
+  const lower = text.toLowerCase();
+  const capture = (pattern: RegExp): string | null => text.match(pattern)?.[1]?.trim() || null;
+  const numeric = (pattern: RegExp): number | null => {
+    const value = capture(pattern);
+    if (value) return Number(value);
+    const word = lower.match(/\b(one|two|three|four|five|six|seven|eight|nine|ten)\b/);
+    const words: Record<string, number> = {
+      one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7,
+      eight: 8, nine: 9, ten: 10,
+    };
+    return word ? words[word[1]] : null;
+  };
+  const ignoredNames = new Set([
+    'anc', 'bp', 'ifa', 'tt', 'phc', 'house', 'weight', 'visit', 'newborn',
+    'mother', 'pregnant', 'no', 'yes', 'she', 'he', 'baby', 'patient', 'the',
+  ]);
+  const names = Array.from(new Set(
+    (text.match(/\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2}\b/g) || [])
+      .filter((name) => !ignoredNames.has(name.toLowerCase()))
+  ));
+  const name = names[0] || capture(/(?:name is|beneficiary)\s+([A-Za-z][A-Za-z ]+)/i);
+  const age = numeric(/\b(\d{1,2})\s*(?:years?\s*old|year old|yrs?\b)/i);
+  const monthWords: Record<string, number> = {
+    one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7,
+    eight: 8, nine: 9, ten: 10,
+  };
+  const pregnancyMonths = numeric(/\b(\d{1,2})\s*months?\s*pregnant\b/i) ??
+    monthWords[lower.match(/\b(one|two|three|four|five|six|seven|eight|nine|ten)\s+months?\s+pregnant\b/i)?.[1] || ''] ?? null;
+  const babyAgeDays = numeric(/\b(\d{1,3})\s*days?\s*old\b/i) ??
+    (/\b(\d{1,2})\s*weeks?\s*old\b/i.test(lower)
+      ? (numeric(/\b(\d{1,2})\s*weeks?\s*old\b/i) ?? 0) * 7 : null);
+  const houseNo = capture(/\bhouse(?:\s*(?:number|no\.?))?\s*([A-Za-z0-9-]+)\b/i) ||
+    capture(/\bghar\s*(?:number|no\.?)?\s*(\d+)\b/i);
+  const weightText = capture(/(?:weight|weighs?|vajan|wazan|bhaar|ತೂಕ)\s*(?:is|of|hai|:)?\s*((?:\d+(?:\.\d+)?|[\w-]+)(?:\s+(?:point|kilo|kg|kilograms?|grams?))?(?:\s+\d+\s*(?:grams?|g))?)/i) ||
+    capture(/\b(\d+(?:\.\d+)?)\s*(?:kg|kilo(?:grams?)?)\b/i);
+  let weight = weightText ? Number(weightText.match(/\d+(?:\.\d+)?/)?.[0]) : null;
+  if (weightText && !weight && /\b(dhai|two point eight)\b/i.test(weightText)) {
+    weight = /\bdhai\b/i.test(weightText) ? 2.5 : 2.8;
+  }
+  const bp = text.match(/\b(?:bp|blood pressure)\s*(?:is|of|:)?\s*(\d{2,3})\s*(?:by|\/)\s*(\d{2,3})\b/i);
+  const hemoglobin = numeric(/\b(?:haemoglobin|hemoglobin|hb)\s*(?:is|of|:)?\s*(\d+(?:\.\d+)?)/i);
+  const lastAncDate = capture(/\b(?:last anc|anc date|last checkup|last visit)\s*(?:was|on|:)?\s*(\d{4}-\d{2}-\d{2}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4})/i);
+  const ttStatus = capture(/\b(?:tt|td)\s*(?:status|dose|doses|injection)?\s*(?:is|:)?\s*((?:one|two|three|1|2|3)\s*(?:dose|doses)?|not taken|none|complete|completed)\b/i);
+  const ttLastDoseDate = capture(/\b(?:last tt|last td|tt last dose|td last dose|last dose)\s*(?:was|on|date|:)?\s*(\d{4}-\d{2}-\d{2}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4})/i);
+  const ifaStatus = /not taking ifa|not taking.*iron|ifa.*not regularly|not.*ifa regularly/i.test(lower)
+    ? 'not taking regularly'
+    : capture(/\b(?:ifa|iron tablets?)\s*(?:status|:)?\s*(taken regularly|not taking regularly|taking regularly|not taken|taken)\b/i);
+  const ifaTablets = numeric(/\b(\d{1,3})\s*(?:ifa|iron)\s*(?:tablets?|pills?|goli)/i);
+  const isNewborn = /\b(newborn|new born|baby|infant|navjaat|ಹುಟ್ಟಿದ ಮಗು)\b/i.test(lower);
+  const isMother = /\bmother\b/i.test(lower) && !isNewborn;
+  const visitType: ExtractedVisitData['visitType'] =
+    isNewborn || isMother || /\b(pnc|postnatal|newborn visit)\b/i.test(lower) ? 'PNC'
+      : /\b(vaccin|immuni[sz]ation)\b/i.test(lower) ? 'immunisation'
+        : /\b(anc|pregnan|garbh|months? pregnant)\b/i.test(lower) ? 'ANC' : null;
+  const beneficiaryType: ExtractedVisitData['beneficiaryType'] = isNewborn ? 'newborn'
+    : isMother ? 'mother' : visitType === 'ANC' ? 'pregnant_woman' : 'unknown';
+  const symptoms: ExtractedVisitData['symptoms'] = [];
+  const symptomPatterns: Array<[string, RegExp]> = [
+    ['vaginal_bleeding', /\b(heavy bleeding|vaginal bleeding|bleeding|spotting|raktasrava)\b/i],
+    ['high_fever_pregnancy', /\b(high fever|fever|high temperature|tez bukhar|tumba jwara)\b/i],
+    ['convulsions_fits', /\b(convulsions?|fits|seizure|daura)\b/i],
+    ['severe_abdominal_pain', /\b(severe abdominal pain|severe stomach pain)\b/i],
+  ];
+  for (const [canonicalId, pattern] of symptomPatterns) {
+    const match = text.match(pattern);
+    if (!match) continue;
+    const start = Math.max(0, match.index! - 30);
+    const evidence = text.slice(start, Math.min(text.length, match.index! + match[0].length + 25));
+    const negated = /\b(no|not|nahi|illa)\b/i.test(text.slice(start, match.index!)) ||
+      /stopped yesterday|has stopped|no longer/i.test(text.slice(match.index!, match.index! + match[0].length + 35));
+    symptoms.push({
+      canonicalId,
+      negated,
+      timing: /yesterday|stopped/i.test(evidence) ? 'past/resolved' : 'current',
+      certainty: /\b(maybe|perhaps|some|possibly)\b/i.test(evidence) ? 'uncertain' : 'high',
+      evidence,
+    });
+  }
+  const evidence: Record<string, string | null> = {
+    beneficiaryName: name,
+    age: capture(/\b\d{1,2}\s*(?:years?\s*old|year old|yrs?\b)/i),
+    houseNo: houseNo ? `house ${houseNo}` : null,
+    weight: weightText,
+    bloodPressure: bp?.[0] || null,
+    ifaStatus: ifaStatus || (ifaTablets !== null ? `${ifaTablets} IFA tablets` : null),
+    lastAncDate,
+    ttStatus,
+    hemoglobin: capture(/\b(?:haemoglobin|hemoglobin|hb)\s*(?:is|of|:)?\s*\d+(?:\.\d+)?/i),
+  };
+  const present = (value: unknown) => value !== null && value !== undefined && value !== '';
+  const confidence: ExtractedVisitData['confidence'] = {
+    beneficiary: present(name) ? 'high' : 'missing',
+    age: present(age) ? 'high' : 'missing',
+    houseNo: present(houseNo) ? 'high' : 'missing',
+    visitType: present(visitType) ? 'high' : 'missing',
+    pregnancyMonths: present(pregnancyMonths) ? 'high' : 'missing',
+    babyAgeDays: present(babyAgeDays) ? 'high' : 'missing',
+    weight: present(weight) ? 'high' : 'missing',
+    bp: bp ? 'high' : 'missing',
+    hemoglobin: present(hemoglobin) ? 'high' : 'missing',
+    lastAncDate: present(lastAncDate) ? 'high' : 'missing',
+    ttStatus: present(ttStatus) ? 'high' : 'missing',
+    ttLastDoseDate: present(ttLastDoseDate) ? 'high' : 'missing',
+    ifa: present(ifaStatus) || present(ifaTablets) ? 'high' : 'missing',
+    vaccinations: /\b(bcg|opv|pentavalent|rotavirus|tt\d?|td\d?)\b/i.test(text) ? 'high' : 'missing',
+  };
+  return {
+    beneficiaryName: name || null,
+    beneficiaryNames: names,
+    beneficiaryId: null,
+    beneficiaryType,
+    age,
+    houseNo,
+    village: null,
+    visitType,
+    pregnancyMonths,
+    gestationalWeeks: pregnancyMonths === null ? null : pregnancyMonths * 4,
+    babyAgeDays,
+    childAgeDays: babyAgeDays,
+    weight,
+    bpSystolic: bp ? Number(bp[1]) : null,
+    bpDiastolic: bp ? Number(bp[2]) : null,
+    hemoglobin,
+    lastAncDate,
+    ttStatus,
+    ttLastDoseDate,
+    ifaStatus,
+    ifaTablets,
+    vaccinationsGiven: (text.match(/\b(BCG|OPV-?\d?|Pentavalent-?\d?|Rotavirus-?\d?|TT-?\d?|TD-?\d?)\b/gi) || []).map((item) => item.toUpperCase()),
+    symptoms,
+    notes: '',
+    evidence,
+    confidence,
+    extractionStatus: 'confirmed',
+    modelUsed: 'mock',
+  };
 }
 
 async function attemptGeminiCall(
@@ -236,6 +381,7 @@ export function validateExtraction(value: unknown): ExtractedVisitData {
     hemoglobin: numberOrNull('hemoglobin'),
     lastAncDate: stringOrNull('lastAncDate'),
     ttStatus: stringOrNull('ttStatus'),
+    ttLastDoseDate: stringOrNull('ttLastDoseDate'),
     ifaStatus: stringOrNull('ifaStatus'),
     ifaTablets,
     vaccinationsGiven: vaccinations,
@@ -271,6 +417,7 @@ function uncertainExtraction(): ExtractedVisitData {
     hemoglobin: null,
     lastAncDate: null,
     ttStatus: null,
+    ttLastDoseDate: null,
     ifaStatus: null,
     ifaTablets: null,
     vaccinationsGiven: [],

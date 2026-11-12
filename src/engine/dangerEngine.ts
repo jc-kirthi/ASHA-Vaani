@@ -167,7 +167,7 @@ export function evaluateDangerSigns(
   // Temporal transitional positive: was absent before, active NOW -> FLAG
   const transPosRegex = /(pehle.*nahi.*ab|kal.*nahi.*aaj|nahi.*shuru|nahi (thi|tha|rahi|ittu).*ab|didn't have.*(now|started)|did not have.*(now|started)|no.*earlier.*now.*(started|active|bleeding)|irallilla.*ivaga (ide|aaguttide)|munche.*irallilla.*ivaga)/i;
   // Temporal transitional negative: was present earlier, NOT present NOW -> CLEAR
-  const transNegRegex = /(pehle.*(thi|tha|hua tha).*ab (nahi|band|theek)|(had|was).*earlier.*now.*(no|none|not|stopped|cured)|earlier.*now.*stopped|(ittu|itthu).*ivaga (illa|nillide)|modalu.*ivaga illa)/i;
+  const transNegRegex = /(pehle.*(thi|tha|hua tha).*ab (nahi|band|theek)|(had|was).*earlier.*now.*(no|none|not|stopped|cured)|earlier.*now.*stopped|(ittu|itthu).*ivaga (illa|nillide)|modalu.*ivaga illa|\b(bleeding|spotting|fever) stopped (yesterday|today|now)\b|\b(stopped|ended) yesterday\b)/i;
   // Unknown: -> ASK
   const unknownRegex = /(bataya nahi|pata nahi|did not mention|not reported)/i;
   // Hedged / doubtful: -> ASK
