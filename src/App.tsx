@@ -1181,7 +1181,7 @@ export default function App() {
         </section>
         {activeTab === 'visit' && (
           <div className="space-y-3 md:grid md:grid-cols-2 md:gap-6 md:space-y-0 md:items-start">
-            <section className="space-y-3 md:sticky md:top-24">
+            <section className="space-y-3">
             {/* Short First-Run Hint */}
             <OnboardingHints />
 
@@ -1291,7 +1291,7 @@ export default function App() {
             </section>
 
             {/* Form Cards with Color Chips */}
-            <section className="space-y-2 pt-1 md:max-h-[calc(100vh-12rem)] md:overflow-y-auto md:pr-2">
+            <section className="space-y-2 pt-1 md:pr-2">
               <div className="flex items-center justify-between text-xs font-bold text-gray-500 uppercase tracking-wider px-1">
                 <span>Verified Field Register</span>
                 <span className="text-[10px] text-teal-700 font-normal">
