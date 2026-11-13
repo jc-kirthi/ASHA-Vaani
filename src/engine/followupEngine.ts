@@ -1,5 +1,7 @@
 import { FollowupItem } from '../types/index.ts';
 
+export const FOLLOWUP_RULE_VERSION = 'draft-v1';
+
 export function generateFollowups(
   visitType: string = 'ANC',
   gestationalWeeks?: number | null,
@@ -16,10 +18,11 @@ export function generateFollowups(
     res.setUTCDate(res.getUTCDate() + days);
     return res.toISOString().split('T')[0];
   };
-  const add = (item: Omit<FollowupItem, 'id' | 'status'>) => {
+  const add = (item: Omit<FollowupItem, 'id' | 'status' | 'ruleVersion'>) => {
     followups.push({
       ...item,
       id: `followup-${followups.length + 1}`,
+      ruleVersion: FOLLOWUP_RULE_VERSION,
       status: item.dueDate.startsWith('Date pending')
         ? 'pending_verification'
         : 'upcoming',

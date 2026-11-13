@@ -61,7 +61,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
         </div>
         <div className="p-2.5 bg-teal-50/70 rounded-xl text-xs space-y-1 text-teal-950">
           <div><span className="font-bold">STT:</span> Gnani Prisma v3.0 (streaming audio)</div>
-          <div><span className="font-bold">TTS:</span> Gnani Timbre v3.0 (generated audio playback)</div>
+          <div><span className="font-bold">TTS:</span> Gnani Timbre v3.0 (WebSocket audio chunks)</div>
           <div><span className="font-bold">Extractor:</span> Gemini → Groq → deterministic rules</div>
           <div><span className="font-bold">Safety:</span> Independent danger-sign rules; references unverified</div>
         </div>

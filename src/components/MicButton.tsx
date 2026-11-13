@@ -9,6 +9,7 @@ interface MicButtonProps {
   onRetry?: () => void;
   tapToSpeakLabel?: string;
   stopListeningLabel?: string;
+  helperText?: string;
 }
 
 export const MicButton: React.FC<MicButtonProps> = ({
@@ -18,6 +19,7 @@ export const MicButton: React.FC<MicButtonProps> = ({
   onRetry,
   tapToSpeakLabel = 'Tap to Speak',
   stopListeningLabel = 'Tap to Stop',
+  helperText,
 }) => {
   const isListening = micState === 'listening';
   const isThinking = micState === 'thinking';
@@ -73,7 +75,7 @@ export const MicButton: React.FC<MicButtonProps> = ({
       <div className="mt-2.5 text-center">
         <p className="text-sm font-bold text-gray-800">
           {isListening
-            ? stopListeningLabel
+            ? 'Listening — pause to analyze automatically'
             : isThinking
             ? 'Analyzing speech...'
             : isSpeaking
@@ -85,11 +87,11 @@ export const MicButton: React.FC<MicButtonProps> = ({
             : tapToSpeakLabel}
         </p>
         <p className="text-xs text-gray-500 font-medium">
-          {isListening
-            ? 'Listening to visit notes (Hindi / Kannada / English)'
+          {helperText || (isListening
+            ? 'Speech is analyzed after a pause. Tap to stop early.'
             : isSpeaking
             ? 'Barge-in active: speak anytime to interrupt'
-            : 'Tap button to start recording home visit'}
+            : 'Tap button to start recording home visit')}
         </p>
       </div>
     </div>

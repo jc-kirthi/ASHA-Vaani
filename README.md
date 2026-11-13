@@ -11,7 +11,13 @@ ASHA Vaani is a voice-register prototype. Finalized transcripts are sent through
 npm run dev
 ```
 
-Starts the unified backend and frontend on port 3000 (`http://localhost:3000`). Gnani Prisma STT uses a live WebSocket proxy; Timbre TTS currently returns a complete audio response for playback rather than streaming audio to the browser.
+Starts the unified backend and frontend on port 3000 (`http://localhost:3000`). Gnani Prisma STT and Timbre TTS use backend WebSocket proxies. Timbre audio chunks are played as they arrive when the browser can decode each chunk; if not, the client combines the received chunks and decodes the completed audio.
+
+For isolated local testing, use:
+```bash
+npm run dev:sandbox
+```
+This runs the same backend on port 3001 by default against `data/sandbox/` instead of the normal beneficiary and visit files, so testing does not touch the existing register or a normal port-3000 instance. Set `PORT` to override the port. Use synthetic, de-identified visit details. The sandbox files are ignored by Git.
 
 To check the configured backend health:
 ```bash
@@ -46,6 +52,8 @@ Keep one local `.env` file in the project root and set values there. Never commi
 - `FALLBACK_BASE_URL`: Groq-compatible API base URL, typically `https://api.groq.com/openai/v1`.
 - `FALLBACK_MODEL`: Active Groq chat model identifier. Set it explicitly; `npm run check:llm` can check the model against the provider account.
 - `ENCRYPTION_KEY`: High-entropy secret used to derive the AES-256-GCM key for saved visit records. Keep it stable and backed up; losing or changing it makes existing records unreadable.
+- `GNANI_MIN_SILENCE_MS`: Gnani endpointing silence interval in milliseconds (300–5000; defaults to 1500).
+- `VITE_SPEECH_SILENCE_MS`: Browser RMS endpointing silence interval in milliseconds (defaults to 1500). Keep it aligned with `GNANI_MIN_SILENCE_MS`.
 
 `/api/health` reports key-presence booleans, service-check results, and the port; it never returns key values. `npm run check:llm` sends a small synthetic extraction request and prints provider status, model, and latency. It does not modify visit data.
 
@@ -68,7 +76,9 @@ Browser Mic (16kHz PCM)
 
 The LLM providers receive only the current transcript, selected language, and the shared extraction schema. They extract fields only; danger decisions are made by the deterministic engine. HTTP 429/503 responses open that provider's circuit for at least 60 seconds; invalid structured output is retried once before switching providers. Other errors are not retried, and provider attempts are time-limited to keep the live turn responsive. Extracted values are validated before they reach the turn pipeline.
 
-The active visit session is kept by the backend and all field edits go through `/api/turn`. Saved visits are encrypted with AES-256-GCM and stored in the ignored `data/visit_records.json`; beneficiaries are stored in the server-side JSON register, which starts without a seeded/demo roster. The beneficiary JSON is not encrypted, so protect the server disk and do not treat this prototype as a production shared database. The browser does not act as a shared visit-record database. Follow-up dates are calculated from the saved visit date and available age/week data. A date is marked pending verification if the required information is absent. Current follow-up rules and draft clinical-reference metadata are unverified and must not be treated as official guidance.
+The active visit session is kept by the backend and all field edits go through `/api/turn`. Saved visits are encrypted with AES-256-GCM and stored in the ignored `data/visit_records.json`; beneficiaries are stored in the server-side JSON register, which starts without a seeded/demo roster. The beneficiary JSON is not encrypted, so protect the server disk and do not treat this prototype as a production shared database. The browser does not act as a shared visit-record database. Follow-up dates are calculated from the saved visit date and available age/week data; each generated task records the local rule version (`draft-v1`). A date is marked pending verification if the required information is absent. Current follow-up rules and draft clinical-reference metadata are unverified and must not be treated as official guidance.
+
+The microphone automatically ends a speech turn after the configured silence interval (1.5 seconds by default); short pauses do not submit a turn. A manual stop remains available. Beneficiary success notices are shown only after the backend returns the persisted beneficiary record and generated ID.
 
 When `FALLBACK_MODEL` is set, the provider adapter verifies that it is available from the configured provider's `/models` response before using it. If it is unset, automatic selection looks for a model identifier containing `instant` and excludes reasoning-model identifiers (and models explicitly marked inactive). The provider model-list API does not expose a measured latency guarantee.
 

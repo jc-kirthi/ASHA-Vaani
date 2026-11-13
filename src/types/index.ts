@@ -11,7 +11,7 @@ export type LanguageCode =
   | 'ml-IN'
   | 'indic-auto';
 
-export type StepState = 'listening' | 'checking' | 'confirm' | 'saved';
+export type StepState = 'start' | 'listening' | 'checking' | 'confirm' | 'saved';
 
 export type MicState = 'idle' | 'connecting' | 'listening' | 'thinking' | 'speaking' | 'error';
 
@@ -104,6 +104,7 @@ export interface FollowupItem {
   dueDate: string;
   focus: string;
   source: string;
+  ruleVersion: string;
   completed?: boolean;
   completedAt?: string | null;
   status?: 'upcoming' | 'due' | 'overdue' | 'completed' | 'pending_verification';

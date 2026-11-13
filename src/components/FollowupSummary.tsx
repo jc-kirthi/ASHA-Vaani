@@ -28,7 +28,7 @@ export const FollowupSummary: React.FC<FollowupSummaryProps> = ({
         </div>
         <div>
           <h3 className="text-base font-bold text-emerald-950">
-            Visit record saved securely
+            Visit successfully saved!
           </h3>
           <p className="text-xs text-emerald-700 font-medium">
             Beneficiary: {beneficiaryName} ({beneficiaryId})

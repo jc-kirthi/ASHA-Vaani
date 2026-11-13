@@ -8,7 +8,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { synthesizeTimbreV3, warmTTSCache } from './server/gnani.ts';
 import { encryptPayload, decryptPayload } from './server/crypto.ts';
 import type { BeneficiaryRecord } from './src/types/index.ts';
-import { discardTurnSession, processTurn } from './server/turn.ts';
+import { discardTurnSession, previewVisitFields, processTurn } from './server/turn.ts';
 import { warmGroqModelCatalog } from './server/groq.ts';
 import { createHealthResponse } from './server/health.ts';
 import { deleteVisitRecords, listVisitRecords, updateVisitFollowup } from './server/records.ts';
@@ -18,7 +18,8 @@ const server = http.createServer(app);
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = '0.0.0.0';
 const PROJECT_ROOT = path.dirname(fileURLToPath(import.meta.url));
-const BENEFICIARIES_FILE = path.join(PROJECT_ROOT, 'data', 'beneficiaries.json');
+const BENEFICIARIES_FILE = process.env.ASHA_BENEFICIARIES_FILE ||
+  path.join(PROJECT_ROOT, 'data', 'beneficiaries.json');
 
 app.use(express.json({ limit: '10mb' }));
 
@@ -170,6 +171,18 @@ app.post('/api/turn', async (req, res) => {
   }
 });
 
+app.post('/api/turn/preview', (req, res) => {
+  const { session_id, transcript, language } = req.body || {};
+  if (
+    typeof session_id !== 'string' || !session_id ||
+    typeof transcript !== 'string' || !transcript.trim() ||
+    typeof language !== 'string'
+  ) {
+    return res.status(400).json({ error: 'session_id, transcript, and language are required.' });
+  }
+  res.json({ fields: previewVisitFields(session_id, transcript, language) });
+});
+
 app.delete('/api/turn/:sessionId', (req, res) => {
   discardTurnSession(req.params.sessionId);
   res.json({ deleted: true });
@@ -254,6 +267,11 @@ wssSTT.on('connection', (clientWs: WebSocket, request: any, url: any) => {
   }
 
   // Connect to Gnani Prisma v3.0 streaming STT
+  const configuredMinimumSilenceMs = Number(process.env.GNANI_MIN_SILENCE_MS);
+  const minimumSilenceMs = Number.isFinite(configuredMinimumSilenceMs) &&
+      configuredMinimumSilenceMs >= 300 && configuredMinimumSilenceMs <= 5000
+    ? configuredMinimumSilenceMs
+    : 1500;
   const gnaniHeaders = {
     'x-api-key-id': apiKey,
     model: 'prisma-v3.0',
@@ -261,7 +279,7 @@ wssSTT.on('connection', (clientWs: WebSocket, request: any, url: any) => {
     'x-sample-rate': '16000',
     format: 'transcribe',
     'x-vad-threshold': '0.7',
-    'x-min-silence-ms': '300',
+    'x-min-silence-ms': String(minimumSilenceMs),
     'x-min-speech-ms': '50',
     'x-min-segment-ms': '100',
   };
@@ -382,10 +400,12 @@ wssTTS.on('connection', (clientWs) => {
         );
       }
 
-      await synthesizeTimbreV3(
+      let streamedChunks = 0;
+      const result = await synthesizeTimbreV3(
         { text, voice, lang, speed },
         (chunk) => {
           if (clientWs.readyState === WebSocket.OPEN) {
+            streamedChunks += 1;
             clientWs.send(
               JSON.stringify({
                 type: 'chunk',
@@ -395,6 +415,22 @@ wssTTS.on('connection', (clientWs) => {
           }
         }
       );
+      if (clientWs.readyState === WebSocket.OPEN) {
+        if (streamedChunks === 0 && result.audioBase64) {
+          clientWs.send(JSON.stringify({
+            type: 'chunk',
+            chunkIndex: 0,
+            audioBase64: result.audioBase64,
+            isFinal: true,
+            timeToFirstAudioMs: result.timeToFirstAudioMs,
+          }));
+        }
+        clientWs.send(JSON.stringify({
+          type: 'complete',
+          isFinal: true,
+          timeToFirstAudioMs: result.timeToFirstAudioMs,
+        }), () => clientWs.close(1000, 'Synthesis complete'));
+      }
     } catch (err: any) {
       if (clientWs.readyState === WebSocket.OPEN) {
         clientWs.send(

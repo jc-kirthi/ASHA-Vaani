@@ -298,7 +298,7 @@ export async function extractWithFallback(
   adapters: ExtractionProviderAdapters = makeDefaultAdapters()
 ): Promise<ExtractedVisitData> {
   if (process.env.LLM_PROVIDER === 'mock') {
-    const extraction = extractWithMock(transcript, language);
+    const extraction = extractDeterministic(transcript, language);
     extraction.extractionDiagnostics = {
       provider: 'Rules',
       model: 'mock',
@@ -380,7 +380,7 @@ export async function extractWithFallback(
     }
   }
 
-  const rules = extractWithMock(transcript, language);
+  const rules = extractDeterministic(transcript, language);
   const hasRuleData = hasExtractedData(rules);
   const diagnostics: ExtractionDiagnostics = {
     provider: 'Rules',
@@ -431,7 +431,7 @@ export function getExtractionCircuitState(): Record<'Gemini' | 'Groq', number> {
   };
 }
 
-export function extractWithMock(transcript: string, _lang = 'en-IN'): ExtractedVisitData {
+export function extractDeterministic(transcript: string, _lang = 'en-IN'): ExtractedVisitData {
   const text = transcript.trim();
   const lower = text.toLowerCase();
   const capture = (pattern: RegExp): string | null => text.match(pattern)?.[1]?.trim() || null;
@@ -464,50 +464,64 @@ export function extractWithMock(transcript: string, _lang = 'en-IN'): ExtractedV
       .filter((candidate) => !ignoredNames.has(candidate.toLowerCase()))
   ));
   const name = names[0] || capture(/(?:name is|beneficiary)\s+([A-Za-z][A-Za-z ]+)/i);
-  const age = numeric(/\b(\d{1,2})\s*(?:years?\s*old|year old|yrs?\b)/i);
+  const age = numeric(/\b(\d{1,2})\s*(?:years?\s*old|year old|yrs?\b)/i) ??
+    numeric(/(\d{1,2})\s*(?:साल|वर्ष|ವರ್ಷ)/i);
   const monthWords: Record<string, number> = {
     one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7,
     eight: 8, nine: 9, ten: 10,
+    एक: 1, दो: 2, तीन: 3, चार: 4, पांच: 5, पाँच: 5, छह: 6, सात: 7, आठ: 8, नौ: 9, दस: 10,
+    ಒಂದು: 1, ಎರಡು: 2, ಮೂರು: 3, ನಾಲ್ಕು: 4, ಐದು: 5, ಆರು: 6, ಏಳು: 7, ಎಂಟು: 8, ಒಂಬತ್ತು: 9, ಹತ್ತು: 10,
   };
-  const pregnancyMonths = numeric(/\b(\d{1,2})\s*months?\s*pregnant\b/i) ??
-    monthWords[lower.match(/\b(one|two|three|four|five|six|seven|eight|nine|ten)\s+months?\s+pregnant\b/i)?.[1] || ''] ?? null;
+  const pregnancyDurationPattern = /(one|two|three|four|five|six|seven|eight|nine|ten|एक|दो|तीन|चार|पांच|पाँच|छह|सात|आठ|नौ|दस|ಒಂದು|ಎರಡು|ಮೂರು|ನಾಲ್ಕು|ಐದು|ಆರು|ಏಳು|ಎಂಟು|ಒಂಬತ್ತು|ಹತ್ತು|\d{1,2})\s*(?:months?\s*(?:pregnant)?|महीने(?:\s*(?:की|का|के))?(?:\s*(?:गर्भवती|गर्भावस्था))?|ತಿಂಗಳು(?:\s*(?:pregnant|ಗರ್ಭಿಣಿ))?)/i;
+  const pregnancyDuration = text.match(pregnancyDurationPattern)?.[1]?.toLowerCase();
+  const pregnancyMonths = pregnancyDuration
+    ? Number(pregnancyDuration) || monthWords[pregnancyDuration] || null
+    : null;
   const babyAgeDays = numeric(/\b(\d{1,3})\s*days?\s*old\b/i) ??
     (/\b(\d{1,2})\s*weeks?\s*old\b/i.test(lower)
       ? (numeric(/\b(\d{1,2})\s*weeks?\s*old\b/i) ?? 0) * 7 : null);
   const houseNo = capture(/\bhouse(?:\s*(?:number|no\.?))?\s*([A-Za-z0-9-]+)\b/i) ||
-    capture(/\bghar\s*(?:number|no\.?)?\s*(\d+)\b/i);
+    capture(/\bghar\s*(?:number|no\.?)?\s*(\d+)\b/i) ||
+    capture(/(?:घर|मकान)\s*(?:नंबर|नं\.?)?\s*([A-Za-z0-9-]+)/i) ||
+    capture(/ಮನೆ\s*(?:ಸಂಖ್ಯೆ|ನಂ\.?)?\s*([A-Za-z0-9-]+)/i);
   const village = capture(/\bvillage\s*(?:is|:)?\s*([A-Za-z][A-Za-z'-]*(?:\s+[A-Za-z][A-Za-z'-]*){0,2})/i) ||
+    capture(/(?:गांव|गाँव|ಗ್ರಾಮ)\s*(?:है|is|:)?\s*([\p{L}][\p{L}'-]*(?:\s+[\p{L}][\p{L}'-]*){0,2})/iu) ||
     capture(/\bhouse(?:\s*(?:number|no\.?))?\s*[A-Za-z0-9-]+\s+in\s+([A-Za-z][A-Za-z'-]*)/i);
-  const weightText = capture(/(?:weight|weighs?|vajan|wazan|bhaar|ತೂಕ)\s*(?:is|of|hai|:)?\s*((?:\d+(?:\.\d+)?|[\w-]+)(?:\s+(?:point|kilo|kg|kilograms?|grams?))?(?:\s+\d+\s*(?:grams?|g))?)/i) ||
+  const weightText = capture(/(?:weight|weighs?|vajan|wazan|bhaar|ತೂಕ|वजन|वज़न)\s*(?:is|of|hai|है|:)?\s*((?:\d+(?:\.\d+)?|[\w-]+)(?:\s+(?:point|kilo|kg|kilograms?|grams?|किलो|केजी))?(?:\s+\d+\s*(?:grams?|g))?)/i) ||
     capture(/\b(\d+(?:\.\d+)?)\s*(?:kg|kilo(?:grams?)?)\b/i);
   let weight = weightText ? Number(weightText.match(/\d+(?:\.\d+)?/)?.[0]) : null;
   if (weightText && !weight && /\b(dhai|two point eight)\b/i.test(weightText)) {
     weight = /\bdhai\b/i.test(weightText) ? 2.5 : 2.8;
   }
-  const bp = text.match(/\b(?:bp|blood pressure)\s*(?:is|of|:)?\s*(\d{2,3})\s*(?:by|\/)\s*(\d{2,3})\b/i);
-  const hemoglobin = numeric(/\b(?:haemoglobin|hemoglobin|hb)\s*(?:is|of|:)?\s*(\d+(?:\.\d+)?)/i);
+
+  const bp = text.match(/(?:\b(?:bp|blood pressure)|रक्तचाप|बीपी|ರಕ್ತದೊತ್ತಡ)\s*(?:is|of|है|:)?\s*(\d{2,3})\s*(?:by|\/)\s*(\d{2,3})/i);
+  const hemoglobin = numeric(/(?:\b(?:haemoglobin|hemoglobin|hb)|हीमोग्लोबिन|ಹಿಮೋಗ್ಲೋಬಿನ್)\s*(?:is|of|है|:)?\s*(\d+(?:\.\d+)?)/i);
   const lastAncDate = capture(/\b(?:last anc|anc date|last checkup|last visit)\s*(?:was|on|:)?\s*(\d{4}-\d{2}-\d{2}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4})/i);
+  const ttCountAfterCue = capture(/(?:tt|td)\s*(?:के|की|ಮತ್ತು)?\s*(one|two|three|1|2|3|एक|दो|तीन|ಒಂದು|ಎರಡು|ಮೂರು)\s*(?:doses?|खुराक|ಡೋಸ್)/i);
   const ttStatus = capture(/\b((?:one|two|three|1|2|3)\s+(?:tt|td)\s+doses?)\b/i) ||
-    capture(/\b(?:tt|td)\s*(?:status|dose|doses|injection)?\s*(?:is|:)?\s*((?:one|two|three|1|2|3)\s*(?:dose|doses)?|not taken|none|complete|completed)\b/i);
+    (ttCountAfterCue ? `${monthWords[ttCountAfterCue.toLowerCase()] || ttCountAfterCue} TT doses` : null) ||
+    capture(/(?:tt|td)\s*(?:status|dose|doses|injection|के|की|ಮತ್ತು)?\s*(?:is|है|:)?\s*((?:one|two|three|1|2|3|एक|दो|तीन|ಒಂದು|ಎರಡು|ಮೂರು)\s*(?:dose|doses|खुराक|ಡೋಸ್)?|not taken|none|complete|completed)/i) ||
+    capture(/\b((?:one|two|three|1|2|3|एक|दो|तीन|ಒಂದು|ಎರಡು|ಮೂರು)\s+(?:tt|td)\s+(?:doses?|खुराक|ಡೋಸ್))/i);
   const ttLastDoseDate = capture(/\b(?:last tt|last td|tt last dose|td last dose|last dose)\s*(?:was|on|date|:)?\s*(\d{4}-\d{2}-\d{2}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4})/i);
-  const ifaStatus = /not taking ifa|not taking.*iron|ifa.*not regularly|not.*ifa regularly/i.test(lower)
+  const ifaStatus = /not taking ifa|not taking.*iron|ifa.*not regularly|not.*ifa regularly|ifa.*(?:नहीं|ಇಲ್ಲ).*(?:ले|ತೆಗೆ)/i.test(lower)
     ? 'not taking regularly'
     : capture(/\b(?:ifa|iron tablets?)\s*(?:status|:)?\s*(taken regularly|not taking regularly|taking regularly|not taken|taken)\b/i) ||
-      (/\b(?:taking|takes|taking regularly)\s+(?:the\s+)?(?:ifa|iron)\s+tablets?\b/i.test(lower) ? 'taking' : null);
+      (/\b(?:taking|takes|taking regularly)\s+(?:the\s+)?(?:ifa|iron)\s+tablets?\b/i.test(lower) ||
+        /ifa\s+(?:tablets?\s+)?(?:ले रही|लेता|लेते|ತೆಗೆದುಕೊಳ್ಳು)/i.test(text) ? 'taking' : null);
   const ifaTablets = numeric(/\b(\d{1,3})\s*(?:ifa|iron)\s*(?:tablets?|pills?|goli)/i) ??
     numeric(/\b(?:ifa|iron)\s*(\d{1,3})\s*(?:tablets?|pills?|goli)/i);
-  const isNewborn = /\b(newborn|new born|baby|infant|navjaat|ಹುಟ್ಟಿದ ಮಗು)\b/i.test(lower);
-  const isMother = /\bmother\b/i.test(lower) && !isNewborn;
+  const isNewborn = /\b(newborn|new born|baby|infant|navjaat|ಹುಟ್ಟಿದ ಮಗು)\b/i.test(lower) || /नवजात|ಮಗು/i.test(text);
+  const isMother = /\bmother\b/i.test(lower) || /माँ|ತಾಯಿ/i.test(text) ? !isNewborn : false;
   const visitType: ExtractedVisitData['visitType'] =
-    isNewborn || isMother || /\b(pnc|postnatal|newborn visit)\b/i.test(lower) ? 'PNC'
-      : /\b(vaccin|immuni[sz]ation)\b/i.test(lower) ? 'immunisation'
-        : /\b(anc|pregnan|garbh|months? pregnant)\b/i.test(lower) ? 'ANC' : null;
+    isNewborn || isMother || /\b(pnc|postnatal|newborn visit)\b/i.test(lower) || /प्रसवोत्तर|ಪ್ರಸವಾನಂತರ/i.test(text) ? 'PNC'
+      : /\b(vaccin|immuni[sz]ation)\b/i.test(lower) || /टीकाकरण|ಲಸಿಕೆ/i.test(text) ? 'immunisation'
+        : /\b(anc|pregnan|garbh|months? pregnant)\b/i.test(lower) || /गर्भवती|गर्भावस्था|ಗರ್ಭಿಣಿ|ಗರ್ಭಾವಸ್ಥೆ/i.test(text) ? 'ANC' : null;
   const beneficiaryType: ExtractedVisitData['beneficiaryType'] = isNewborn ? 'newborn'
     : isMother ? 'mother' : visitType === 'ANC' ? 'pregnant_woman' : 'unknown';
   const symptoms: ExtractedVisitData['symptoms'] = [];
   const symptomPatterns: Array<[string, RegExp]> = [
-    ['vaginal_bleeding', /\b(heavy bleeding|vaginal bleeding|bleeding|spotting|raktasrava)\b/i],
-    ['high_fever_pregnancy', /\b(high fever|fever|high temperature|tez bukhar|tumba jwara)\b/i],
+    ['vaginal_bleeding', /\b(heavy bleeding|vaginal bleeding|bleeding|spotting|raktasrava)\b|रक्तस्राव|खून बहना|खून आना|ರಕ್ತಸ್ರಾವ/i],
+    ['high_fever_pregnancy', /\b(high fever|fever|high temperature|tez bukhar|tumba jwara)\b|बुखार|ಜ್ವರ/i],
     ['convulsions_fits', /\b(convulsions?|fits|seizure|daura)\b/i],
     ['severe_abdominal_pain', /\b(severe abdominal pain|severe stomach pain)\b/i],
   ];
@@ -515,20 +529,25 @@ export function extractWithMock(transcript: string, _lang = 'en-IN'): ExtractedV
     const match = text.match(pattern);
     if (!match) continue;
     const start = Math.max(0, match.index! - 30);
-    const evidence = text.slice(start, Math.min(text.length, match.index! + match[0].length + 25));
+    const end = Math.min(text.length, match.index! + match[0].length + 45);
+    const evidence = text.slice(start, end);
+    const afterSymptom = text.slice(match.index! + match[0].length, end);
     const negated = /\b(no|not|nahi|illa)\b/i.test(text.slice(start, match.index!)) ||
+      /नहीं|नही|ಇಲ್ಲ/.test(text.slice(start, match.index!)) ||
+      /\b(no|not|nahi|illa)\b|नहीं|नही|ಇಲ್ಲ/i.test(afterSymptom) ||
+      /नहीं|ಇಲ್ಲ/.test(text.slice(start, match.index!)) ||
       /stopped yesterday|has stopped|no longer/i.test(text.slice(match.index!, match.index! + match[0].length + 35));
     symptoms.push({
       canonicalId,
       negated,
-      timing: /yesterday|stopped/i.test(evidence) ? 'past/resolved' : 'current',
-      certainty: /\b(maybe|perhaps|some|possibly)\b/i.test(evidence) ? 'uncertain' : 'high',
+      timing: /yesterday|stopped|कल|ನಿನ್ನೆ/i.test(evidence) ? 'past/resolved' : 'current',
+      certainty: /\b(maybe|perhaps|some|possibly)\b/i.test(evidence) || /शायद|ಬಹುಶಃ/.test(evidence) ? 'uncertain' : 'high',
       evidence,
     });
   }
   const evidence: Record<string, string | null> = {
     beneficiaryName: name,
-    age: capture(/\b\d{1,2}\s*(?:years?\s*old|year old|yrs?\b)/i),
+    age: capture(/\b\d{1,2}\s*(?:years?\s*old|year old|yrs?\b)/i) || capture(/\d{1,2}\s*(?:साल|वर्ष|ವರ್ಷ)/i),
     houseNo: houseNo ? `house ${houseNo}` : null,
     weight: weightText,
     bloodPressure: bp?.[0] || null,
@@ -585,6 +604,8 @@ export function extractWithMock(transcript: string, _lang = 'en-IN'): ExtractedV
     modelUsed: 'mock',
   };
 }
+
+export const extractWithMock = extractDeterministic;
 
 async function attemptGeminiCall(
   ai: GoogleGenAI,

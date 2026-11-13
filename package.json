@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
+    "dev:sandbox": "tsx scripts/start-sandbox.ts",
     "build": "vite build",
     "start": "tsx server.ts",
     "preview": "tsx server.ts",

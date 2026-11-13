@@ -100,6 +100,39 @@ assert.equal(spokenVisit.ifaStatus, 'taking');
 assert.equal(spokenVisit.ttStatus, 'two TT doses');
 console.log('PASS Deterministic fallback extracts supported fields from natural visit narration');
 
+const hindiVisit = extractWithMock(
+  'आज Sita Devi से मिली, 25 साल की हैं, सात महीने गर्भवती हैं, घर नंबर 24, गांव Rampur, वजन 56 किलो, BP 120/80, Hb 10.5, IFA tablets ले रही हैं, TT के दो doses मिले, रक्तस्राव नहीं है।',
+  'hi-IN'
+);
+assert.equal(hindiVisit.beneficiaryName, 'Sita Devi');
+assert.equal(hindiVisit.age, 25);
+assert.equal(hindiVisit.pregnancyMonths, 7);
+assert.equal(hindiVisit.houseNo, '24');
+assert.equal(hindiVisit.village, 'Rampur');
+assert.equal(hindiVisit.weight, 56);
+assert.equal(hindiVisit.bpSystolic, 120);
+assert.equal(hindiVisit.hemoglobin, 10.5);
+assert.equal(hindiVisit.ifaStatus, 'taking');
+assert.equal(hindiVisit.ttStatus, '2 TT doses');
+assert.ok(hindiVisit.symptoms.some((symptom) => symptom.canonicalId === 'vaginal_bleeding' && symptom.negated));
+
+const kannadaVisit = extractWithMock(
+  'ಇಂದು Sita Devi ANC visit, 25 ವರ್ಷ, 7 ತಿಂಗಳು ಗರ್ಭಿಣಿ, ಮನೆ ಸಂಖ್ಯೆ 24, ಗ್ರಾಮ Rampur, ತೂಕ 56 kg, BP 120/80, Hb 10.5, IFA tablets ತೆಗೆದುಕೊಳ್ಳುತ್ತಿದ್ದಾರೆ, TT ಎರಡು ಡೋಸ್, ರಕ್ತಸ್ರಾವ ಇಲ್ಲ.',
+  'kn-IN'
+);
+assert.equal(kannadaVisit.beneficiaryName, 'Sita Devi');
+assert.equal(kannadaVisit.age, 25);
+assert.equal(kannadaVisit.pregnancyMonths, 7);
+assert.equal(kannadaVisit.houseNo, '24');
+assert.equal(kannadaVisit.village, 'Rampur');
+assert.equal(kannadaVisit.weight, 56);
+assert.equal(kannadaVisit.bpSystolic, 120);
+assert.equal(kannadaVisit.hemoglobin, 10.5);
+assert.equal(kannadaVisit.ifaStatus, 'taking');
+assert.equal(kannadaVisit.ttStatus, '2 TT doses');
+assert.ok(kannadaVisit.symptoms.some((symptom) => symptom.canonicalId === 'vaginal_bleeding' && symptom.negated));
+console.log('PASS Deterministic fallback extracts supported fields from Hindi and Kannada mixed-language notes');
+
 function providers(
   gemini: (transcript: string, language: string, signal: AbortSignal) => Promise<ReturnType<typeof extraction>>,
   groq: (transcript: string, language: string, signal: AbortSignal) => Promise<ReturnType<typeof extraction>>,

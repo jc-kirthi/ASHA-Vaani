@@ -12,7 +12,7 @@ export const DANGER_SIGNS_LIST = [
       version: '[TODO: NHM Guidelines 2020 Revision]',
       section_or_page: '[TODO: Section 3.2, Page 28]',
     },
-    synonyms: ['bleeding', 'rakt', 'khoon', 'spotting', 'rokto', 'lohi', 'rathapokku', 'rakthasrava'],
+    synonyms: ['bleeding', 'rakt', 'khoon', 'spotting', 'rokto', 'lohi', 'rathapokku', 'rakthasrava', 'रक्तस्राव', 'खून बहना', 'खून आना', 'ರಕ್ತಸ್ರಾವ', 'ರಕ್ತ ಹೋಗುವುದು'],
   },
   {
     id: 'convulsions_fits',
@@ -24,7 +24,7 @@ export const DANGER_SIGNS_LIST = [
       version: '[TODO: NHM 2020 Revision]',
       section_or_page: '[TODO: Section 4.1, Page 34]',
     },
-    synonyms: ['daura', 'fits', 'seizure', 'jhatka', 'mirgi', 'moorche', 'aanchki'],
+    synonyms: ['daura', 'fits', 'seizure', 'jhatka', 'mirgi', 'moorche', 'aanchki', 'दौरा', 'झटके', 'ಸೆಳೆತ'],
   },
   {
     id: 'severe_headache_blurred_vision',
@@ -36,7 +36,7 @@ export const DANGER_SIGNS_LIST = [
       version: '[TODO: NHM 2020 Revision]',
       section_or_page: '[TODO: Section 4.2, Page 36]',
     },
-    synonyms: ['dhundhla', 'blurred vision', 'tez sar dard', 'kannu mabbaguvudu', 'mabbaguvudu'],
+    synonyms: ['dhundhla', 'blurred vision', 'tez sar dard', 'kannu mabbaguvudu', 'mabbaguvudu', 'तेज सिर दर्द', 'धुंधला दिखना', 'ತೀವ್ರ ತಲೆನೋವು', 'ಮಸುಕಾದ ದೃಷ್ಟಿ'],
   },
   {
     id: 'high_fever_pregnancy',
@@ -48,7 +48,7 @@ export const DANGER_SIGNS_LIST = [
       version: '[TODO: MoHFW 2019]',
       section_or_page: '[TODO: Chapter 5, Page 52]',
     },
-    synonyms: ['tez bukhar', 'high fever', 'tumba jwara', 'taap', 'taav', 'jor', 'paniyum', 'bukhar', 'fever', 'jwara'],
+    synonyms: ['tez bukhar', 'high fever', 'tumba jwara', 'taap', 'taav', 'jor', 'paniyum', 'bukhar', 'fever', 'jwara', 'तेज बुखार', 'तेज़ बुखार', 'ज्यादा बुखार', 'ಹೆಚ್ಚಿನ ಜ್ವರ', 'ತೀವ್ರ ಜ್ವರ', 'ಜ್ವರ'],
   },
   {
     id: 'severe_abdominal_pain',
@@ -60,7 +60,7 @@ export const DANGER_SIGNS_LIST = [
       version: '[TODO: NHM 2020]',
       section_or_page: '[TODO: Section 3.5, Page 31]',
     },
-    synonyms: ['pet mein tez dard', 'severe abdominal pain', 'hotte tumba novu', 'pet dard', 'hottenovu'],
+    synonyms: ['pet mein tez dard', 'severe abdominal pain', 'hotte tumba novu', 'pet dard', 'hottenovu', 'पेट में तेज दर्द', 'पेट में तेज़ दर्द', 'ತೀವ್ರ ಹೊಟ್ಟೆನೋವು', 'ಹೊಟ್ಟೆನೋವು'],
   },
   {
     id: 'reduced_fetal_movement',
@@ -72,7 +72,7 @@ export const DANGER_SIGNS_LIST = [
       version: '[TODO: MCP Card 2021]',
       section_or_page: '[TODO: Page 8, Fetal Monitoring]',
     },
-    synonyms: ['bachha hil nahi raha', 'movement kam', 'reduced fetal movement', 'chalane illa', 'bachha hil', 'fetal movement'],
+    synonyms: ['bachha hil nahi raha', 'movement kam', 'reduced fetal movement', 'chalane illa', 'bachha hil', 'fetal movement', 'बच्चा नहीं हिल रहा', 'बच्चे की हलचल कम', 'ಮಗುವಿನ ಚಲನೆ ಕಡಿಮೆ'],
   },
   {
     id: 'newborn_fever',
@@ -84,7 +84,7 @@ export const DANGER_SIGNS_LIST = [
       version: '[TODO: HBNC Revised 2021]',
       section_or_page: '[TODO: Card 3, Danger Signs, Page 19]',
     },
-    synonyms: ['bachhe ko bukhar', 'newborn fever', 'maguvige jwara'],
+    synonyms: ['bachhe ko bukhar', 'newborn fever', 'maguvige jwara', 'नवजात को बुखार', 'मगುವಿಗೆ ಜ್ವರ', 'ಮಗುವಿಗೆ ಜ್ವರ'],
   },
   {
     id: 'newborn_hypothermia',
@@ -96,7 +96,7 @@ export const DANGER_SIGNS_LIST = [
       version: '[TODO: HBNC 2021]',
       section_or_page: '[TODO: Chapter 4, Cold Injury, Page 22]',
     },
-    synonyms: ['thanda pad gaya', 'sharir thanda', 'cold body', 'hypothermia', 'cold like ice'],
+    synonyms: ['thanda pad gaya', 'sharir thanda', 'cold body', 'hypothermia', 'cold like ice', 'शरीर ठंडा', 'ದೇಹ ತಣ್ಣಗೆ'],
   },
   {
     id: 'newborn_not_feeding',
@@ -108,7 +108,7 @@ export const DANGER_SIGNS_LIST = [
       version: '[TODO: HBNC 2021]',
       section_or_page: '[TODO: Page 25, Table 2]',
     },
-    synonyms: ['doodh nahi', 'haalu kudiyuttilla', 'not feeding', 'refusing milk', 'palu tagatledu', 'paal kudikkavillai'],
+    synonyms: ['doodh nahi', 'haalu kudiyuttilla', 'not feeding', 'refusing milk', 'palu tagatledu', 'paal kudikkavillai', 'दूध नहीं पी रहा', 'दूध नहीं पी रही', 'ಹಾಲು ಕುಡಿಯುತ್ತಿಲ್ಲ'],
   },
   {
     id: 'fast_breathing_chest_indrawing',
@@ -120,7 +120,7 @@ export const DANGER_SIGNS_LIST = [
       version: '[TODO: HBNC 2021]',
       section_or_page: '[TODO: Page 27, Respiratory Count > 60/min]',
     },
-    synonyms: ['pasli chal', 'saans tez', 'chhati dhas', 'fast breathing', 'saah tez', 'tez saans'],
+    synonyms: ['pasli chal', 'saans tez', 'chhati dhas', 'fast breathing', 'saah tez', 'tez saans', 'तेज सांस', 'तेज़ सांस', 'छाती धंसना', 'ವೇಗದ ಉಸಿರಾಟ', 'ಎದೆ ಒಳಗೆ ಹೋಗುವುದು'],
   },
   {
     id: 'yellow_palms_soles',
@@ -132,7 +132,7 @@ export const DANGER_SIGNS_LIST = [
       version: '[TODO: HBNC 2021]',
       section_or_page: '[TODO: Page 31, Zone 5 Jaundice]',
     },
-    synonyms: ['peele pad gaye', 'yellow palms', 'yellow soles', 'peeliya', 'haladi'],
+    synonyms: ['peele pad gaye', 'yellow palms', 'yellow soles', 'peeliya', 'haladi', 'हथेली पीली', 'तलवे पीले', 'ಹಳದಿ ಅಂಗೈ', 'ಹಳದಿ ಪಾದ'],
   },
   {
     id: 'unresponsive_lethargic',
@@ -144,7 +144,7 @@ export const DANGER_SIGNS_LIST = [
       version: '[TODO: HBNC 2021]',
       section_or_page: '[TODO: Page 33, Activity Check]',
     },
-    synonyms: ['sust pad gaya', 'harkat nahi kar raha', 'unresponsive', 'lethargic', 'sust'],
+    synonyms: ['sust pad gaya', 'harkat nahi kar raha', 'unresponsive', 'lethargic', 'sust', 'सुस्त', 'बेहोश', 'ಪ್ರತಿಕ್ರಿಯೆ ಇಲ್ಲ', 'ಮಂಕು'],
   },
 ];
 
@@ -166,12 +166,12 @@ export function evaluateDangerSigns(
   const evidence: Array<{ signId: string; name: string; state: string; reason: string }> = [];
 
   // Temporal transitional positive: was absent before, active NOW -> FLAG
-  const transPosRegex = /(pehle.*nahi.*ab|kal.*nahi.*aaj|nahi.*shuru|nahi (thi|tha|rahi|ittu).*ab|didn't have.*(now|started)|did not have.*(now|started)|no.*earlier.*now.*(started|active|bleeding)|irallilla.*ivaga (ide|aaguttide)|munche.*irallilla.*ivaga)/i;
-  const transNegRegex = /(pehle.*(thi|tha|hua tha).*ab (nahi|band|theek)|(had|was).*earlier.*now.*(no|none|not|stopped|cured)|earlier.*now.*stopped|(ittu|itthu).*ivaga (illa|nillide)|modalu.*ivaga illa|\b(bleeding|spotting|fever) stopped (yesterday|today|now)\b|\b(stopped|ended) yesterday\b|\b(stopped|resolved|ended|cured)\b)/i;
-  const unknownRegex = /(bataya nahi|pata nahi|did not mention|not reported|unknown whether|unclear whether)/i;
-  const hedgeRegex = /(thoda.*jaisa|jaisa laga|doubtful|shakk hai|maybe|possibly|perhaps|anusthide)/i;
-  const negRegex = /\b(nahi|bilkul nahi|no|not|none|illa|aguttilla|ledu|illai|nei|nathi|denies|absent)\b/i;
-  const pastRegex = /\b(yesterday|last night|last week|earlier|previously|before|was|had)\b|kal|pehle|munche/i;
+  const transPosRegex = /(pehle.*nahi.*ab|kal.*nahi.*aaj|nahi.*shuru|nahi (thi|tha|rahi|ittu).*ab|didn't have.*(now|started)|did not have.*(now|started)|no.*earlier.*now.*(started|active|bleeding)|irallilla.*ivaga (ide|aaguttide)|munche.*irallilla.*ivaga|पहले.*नहीं.*अब|ಇಲ್ಲ.*ಈಗ.*(ಇದೆ|ಆಗುತ್ತಿದೆ))/i;
+  const transNegRegex = /(pehle.*(thi|tha|hua tha).*ab (nahi|band|theek)|(had|was).*earlier.*now.*(no|none|not|stopped|cured)|earlier.*now.*stopped|(ittu|itthu).*ivaga (illa|nillide)|modalu.*ivaga illa|\b(bleeding|spotting|fever) stopped (yesterday|today|now)\b|\b(stopped|ended) yesterday\b|\b(stopped|resolved|ended|cured)\b|पहले.*(था|थी).*अब.*(नहीं|बंद)|ಹಿಂದೆ.*ಈಗ.*(ಇಲ್ಲ|ನಿಂತಿದೆ))/i;
+  const unknownRegex = /(bataya nahi|pata nahi|did not mention|not reported|unknown whether|unclear whether|पता नहीं|बताया नहीं|ಗೊತ್ತಿಲ್ಲ)/i;
+  const hedgeRegex = /(thoda.*jaisa|jaisa laga|doubtful|shakk hai|maybe|possibly|perhaps|anusthide|शायद|हो सकता है|ಬಹುಶಃ)/i;
+  const negRegex = /\b(nahi|bilkul nahi|no|not|none|illa|aguttilla|ledu|illai|nei|nathi|denies|absent)\b|नहीं|नही|ಇಲ್ಲ/i;
+  const pastRegex = /\b(yesterday|last night|last week|earlier|previously|before|was|had)\b|kal|pehle|munche|कल|पहले|था|थी|ನಿನ್ನೆ|ಹಿಂದೆ/i;
 
   for (const sign of DANGER_SIGNS_LIST) {
     const clarification = currentClarifications[sign.id];
@@ -204,7 +204,7 @@ export function evaluateDangerSigns(
     matches.sort((a, b) => a.start - b.start);
     const states = matches.map(({ synonym, start }) => {
       const end = start + synonym.length;
-      const delimiters = [',', ';', '.', '?', '!', ' and ', ' but ', ' however '];
+      const delimiters = [',', ';', '.', '?', '!', ' and ', ' but ', ' however ', ' और ', ' ಆದರೆ ', ' ಮತ್ತು '];
       let clauseStart = 0;
       let clauseEnd = t.length;
       for (const delimiter of delimiters) {

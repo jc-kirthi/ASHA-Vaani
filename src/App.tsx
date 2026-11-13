@@ -6,6 +6,7 @@
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import {
   UserCheck,
+  CheckCircle2,
   Scale,
   Activity,
   Pill,
@@ -73,6 +74,10 @@ interface PipelineTurnResponse {
   saved_record: Record<string, unknown> | null;
   test_mode: boolean;
   roster_label: string | null;
+  beneficiary_result: {
+    status: 'created' | 'existing';
+    beneficiary: BeneficiaryRecord;
+  } | null;
   duplicate_candidates: BeneficiaryRecord[];
   rule: string;
   llm_status: 'ready' | 'retried' | 'busy';
@@ -189,6 +194,34 @@ function toSavedVisitRecord(record: Record<string, unknown>): SavedVisitRecord {
   };
 }
 
+function getFieldUpdateMessages(
+  previous: Record<string, PipelineField>,
+  next: Record<string, PipelineField>
+): string[] {
+  const labels: Record<string, string> = {
+    name: 'Beneficiary',
+    age: 'Age',
+    visitType: 'Visit type',
+    weight: 'Weight',
+    bpSystolic: 'Blood pressure',
+    hemoglobin: 'Haemoglobin',
+    lastAncDate: 'Last ANC date',
+    ttStatus: 'TT/Td status',
+    ifaStatus: 'IFA status',
+    vaccinationsGiven: 'Vaccinations',
+  };
+  return Object.entries(next).flatMap(([key, field]) => {
+    if (field.value === null || field.value === undefined) return [];
+    const oldValue = previous[key]?.value;
+    if (JSON.stringify(oldValue) === JSON.stringify(field.value)) return [];
+    const label = labels[key] || key.replace(/[A-Z]/g, (letter) => ` ${letter}`).replace(/^./, (letter) => letter.toUpperCase());
+    const format = (value: unknown) => Array.isArray(value) ? value.join(', ') : String(value);
+    return [oldValue === null || oldValue === undefined
+      ? `${label} added: ${format(field.value)}`
+      : `${label} updated: ${format(oldValue)} → ${format(field.value)}`];
+  });
+}
+
 export default function App() {
   // Navigation
   const [activeTab, setActiveTab] = useState<'visit' | 'records' | 'settings'>('visit');
@@ -213,9 +246,11 @@ export default function App() {
   const [serverTestMode, setServerTestMode] = useState(false);
 
   // Visit State
-  const [stepState, setStepState] = useState<StepState>('listening');
+  const [stepState, setStepState] = useState<StepState>('start');
+  const [visitStarted, setVisitStarted] = useState(false);
   const [dangerResult, setDangerResult] = useState<DangerEngineResult | null>(null);
   const [transcript, setTranscript] = useState<string>('');
+  const [fieldUpdates, setFieldUpdates] = useState<string[]>([]);
   const [extractedJson, setExtractedJson] = useState<any>(null);
   const [activeQuestion, setActiveQuestion] = useState<string | null>(null);
 
@@ -240,7 +275,11 @@ export default function App() {
     return [];
   });
   const [newBeneficiaries, setNewBeneficiaries] = useState<BeneficiaryRecord[]>([]);
+  const [beneficiaryNotice, setBeneficiaryNotice] = useState<PipelineTurnResponse['beneficiary_result']>(null);
+  const beneficiaryNoticeKeysRef = useRef(new Set<string>());
+  const beneficiaryNoticeTimeoutRef = useRef<number | null>(null);
   const [pipelineFields, setPipelineFields] = useState<Record<string, PipelineField>>({});
+  const pipelineFieldsRef = useRef(pipelineFields);
   const [beneficiarySearch, setBeneficiarySearch] = useState('');
   const [savedRecordId, setSavedRecordId] = useState<string | null>(null);
   const [readyToConfirm, setReadyToConfirm] = useState(false);
@@ -250,6 +289,19 @@ export default function App() {
   const stopRecordingRef = useRef<() => void>(() => {});
   const lastProcessedTranscriptRef = useRef('');
   const awaitingSaveConfirmationRef = useRef(false);
+  const previewTimerRef = useRef<number | null>(null);
+  const previewRequestIdRef = useRef(0);
+
+  useEffect(() => {
+    pipelineFieldsRef.current = pipelineFields;
+  }, [pipelineFields]);
+
+  useEffect(() => () => {
+    if (previewTimerRef.current !== null) window.clearTimeout(previewTimerRef.current);
+    if (beneficiaryNoticeTimeoutRef.current !== null) {
+      window.clearTimeout(beneficiaryNoticeTimeoutRef.current);
+    }
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -427,7 +479,10 @@ export default function App() {
       const pipelineStarted = performance.now();
       const pipelineUtterance = spokenText.trim();
       if (!pipelineUtterance) return;
-      setReadyToConfirm(false);
+      const saveAttempt = awaitingSaveConfirmationRef.current &&
+        /^(yes|yeah|yep|correct|okay|ok|save|haan|हां|हाँ|ಹೌದು)\b/i.test(pipelineUtterance);
+      if (!saveAttempt) setReadyToConfirm(false);
+      setStepState('checking');
       if (isPlaying && /^(no|nahi|illi|galat|correction)\b/i.test(pipelineUtterance)) {
         stopAudio();
       }
@@ -446,6 +501,8 @@ export default function App() {
         if (!response.ok) throw new Error(result.error || 'Visit pipeline failed.');
 
         setTranscript(result.transcript);
+        const updates = getFieldUpdateMessages(pipelineFieldsRef.current, result.fields);
+        if (updates.length) setFieldUpdates(updates);
         setPipelineFields(result.fields);
         setExtractedJson({
           ...result.extracted,
@@ -457,7 +514,7 @@ export default function App() {
         awaitingSaveConfirmationRef.current = Boolean(result.read_back_text);
         setReadyToConfirm(Boolean(result.read_back_text) && !result.saved);
         setTurnLatencyMs(Math.round(performance.now() - pipelineStarted));
-        setStepState(result.saved ? 'saved' : result.questions.length ? 'confirm' : 'checking');
+        setStepState(result.saved ? 'saved' : result.read_back_text ? 'confirm' : 'checking');
         addJudgeLog('TURN_PIPELINE', result.rule, {
           source: result.test_mode ? 'mock text test' : 'Gnani Prisma v3.0',
           transcript: result.transcript,
@@ -478,9 +535,29 @@ export default function App() {
           });
         }
 
-        if (result.roster_label) {
-          const rosterResponse = await fetch('/api/beneficiaries');
-          if (rosterResponse.ok) setNewBeneficiaries(await rosterResponse.json());
+        if (result.beneficiary_result) {
+          const noticeKey = `${result.session_id}:${result.beneficiary_result.beneficiary.id}`;
+          if (!beneficiaryNoticeKeysRef.current.has(noticeKey)) {
+            beneficiaryNoticeKeysRef.current.add(noticeKey);
+            setBeneficiaryNotice(result.beneficiary_result);
+            if (beneficiaryNoticeTimeoutRef.current !== null) {
+              window.clearTimeout(beneficiaryNoticeTimeoutRef.current);
+            }
+            beneficiaryNoticeTimeoutRef.current = window.setTimeout(() => {
+              setBeneficiaryNotice(null);
+              beneficiaryNoticeTimeoutRef.current = null;
+            }, 7000);
+          }
+        }
+        if (result.roster_label === 'created') {
+          void fetch('/api/beneficiaries').then(async (rosterResponse) => {
+            if (rosterResponse.ok) setNewBeneficiaries(await rosterResponse.json());
+          }).catch(() => {
+            setWorkflowError({
+              message: 'Beneficiary was saved, but the roster could not be refreshed.',
+              canRetry: true,
+            });
+          });
         }
         if (result.duplicate_candidates.length) {
           setDisambiguationState({
@@ -515,6 +592,7 @@ export default function App() {
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Visit pipeline failed.';
         setWorkflowError({ message, canRetry: true });
+        setReadyToConfirm(saveAttempt);
         setStepState('confirm');
         addJudgeLog('TURN_PIPELINE_ERROR', 'Backend turn pipeline failed.');
         return;
@@ -545,12 +623,14 @@ export default function App() {
       });
       const result = await response.json() as PipelineTurnResponse & { error?: string };
       if (!response.ok) throw new Error(result.error || 'Could not apply field correction.');
+      const updates = getFieldUpdateMessages(pipelineFieldsRef.current, result.fields);
+      if (updates.length) setFieldUpdates(updates);
       setPipelineFields(result.fields);
       setDangerResult(result.danger);
       setActiveQuestion(result.questions[0] || null);
       awaitingSaveConfirmationRef.current = Boolean(result.read_back_text);
       setReadyToConfirm(Boolean(result.read_back_text) && !result.saved);
-      setStepState(result.saved ? 'saved' : result.questions.length ? 'confirm' : 'checking');
+      setStepState(result.saved ? 'saved' : result.read_back_text ? 'confirm' : 'checking');
       if (result.read_back_text || result.answer_text) {
         speak(result.read_back_text || result.answer_text || '', language, voice, () => {
           if (!result.saved && result.questions.length) void startRecordingRef.current(language);
@@ -591,6 +671,31 @@ export default function App() {
     }
   }, [savedRecordId]);
 
+  const retryWorkflow = async () => {
+    if (readyToConfirm && awaitingSaveConfirmationRef.current) {
+      await processUtterance('yes');
+      return;
+    }
+    try {
+      const [recordsResponse, beneficiariesResponse] = await Promise.all([
+        fetch('/api/records'),
+        fetch('/api/beneficiaries'),
+      ]);
+      const records = await recordsResponse.json();
+      const beneficiaries = await beneficiariesResponse.json();
+      if (!recordsResponse.ok) throw new Error(records.error || 'Saved visits could not be loaded.');
+      if (!beneficiariesResponse.ok) throw new Error(beneficiaries.error || 'Beneficiaries could not be loaded.');
+      setSavedRecords((records as Array<Record<string, unknown>>).map(toSavedVisitRecord));
+      setNewBeneficiaries(beneficiaries as BeneficiaryRecord[]);
+      setWorkflowError(null);
+    } catch (error) {
+      setWorkflowError({
+        message: error instanceof Error ? error.message : 'The visit register could not be refreshed.',
+        canRetry: true,
+      });
+    }
+  };
+
   const handleTranscriptChunk = useCallback(
     (text: string, isFinal: boolean, metadata?: any) => {
       setTranscript(text);
@@ -598,9 +703,15 @@ export default function App() {
         addJudgeLog('STT_CHUNK', `Transcript chunk from ${metadata.engine || 'Gnani'}`, metadata);
       }
       if (isFinal) {
+        previewRequestIdRef.current += 1;
+        if (previewTimerRef.current !== null) {
+          window.clearTimeout(previewTimerRef.current);
+          previewTimerRef.current = null;
+        }
+        setStepState('checking');
         const finalText = text.trim();
-        const isSpokenCorrection = /^(no|nahi|illi|galat|correction)\b/i.test(finalText) ||
-          /change weight/i.test(finalText);
+        const isSpokenCorrection = /^(no|nahi|illi|galat|correction|actually|update|change|weight|bp|age|नहीं|वजन|उम्र|ಇಲ್ಲ|ತೂಕ)\b/i.test(finalText) ||
+          /change weight|not correct|instead/i.test(finalText);
         const isSaveConfirmation = awaitingSaveConfirmationRef.current &&
           /^(yes|yeah|yep|correct|okay|ok|save|haan|हां|हाँ|ಹೌದು)\b/i.test(finalText);
         if (isPlaying && !isSpokenCorrection && !isSaveConfirmation) return;
@@ -609,13 +720,44 @@ export default function App() {
           stopRecordingRef.current();
           void processUtterance(finalText);
         }
+      } else if (text.trim().length >= 6) {
+        if (previewTimerRef.current !== null) window.clearTimeout(previewTimerRef.current);
+        const requestId = ++previewRequestIdRef.current;
+        previewTimerRef.current = window.setTimeout(async () => {
+          try {
+            const response = await fetch('/api/turn/preview', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                session_id: pipelineSessionIdRef.current,
+                transcript: text.trim(),
+                language,
+              }),
+            });
+            const result = await response.json() as { fields?: Record<string, PipelineField>; error?: string };
+            if (!response.ok) throw new Error(result.error || 'Live register preview failed.');
+            if (requestId !== previewRequestIdRef.current || !result.fields) return;
+            const updates = getFieldUpdateMessages(pipelineFieldsRef.current, result.fields);
+            if (updates.length) setFieldUpdates(updates);
+            setPipelineFields(result.fields);
+          } catch (error) {
+            if (requestId === previewRequestIdRef.current) {
+              setWorkflowError({
+                message: error instanceof Error ? error.message : 'Live register preview failed.',
+                canRetry: true,
+              });
+            }
+          }
+        }, 500);
       }
     },
-    [processUtterance, addJudgeLog, isPlaying]
+    [processUtterance, addJudgeLog, isPlaying, language]
   );
 
   const {
     isRecording,
+    isConnecting,
+    isFinalizing,
     audioLevel,
     noiseMode,
     error: sttError,
@@ -623,18 +765,55 @@ export default function App() {
     startRecording,
     stopRecording,
   } = useAudioRecorder(handleTranscriptChunk);
-  startRecordingRef.current = startRecording;
+  const startVoiceTurn = useCallback(async (languageCode: string) => {
+    lastProcessedTranscriptRef.current = '';
+    await startRecording(languageCode);
+  }, [startRecording]);
+  startRecordingRef.current = startVoiceTurn;
   stopRecordingRef.current = stopRecording;
+
+  useEffect(() => {
+    if (isFinalizing) setStepState('checking');
+  }, [isFinalizing]);
+
+  useEffect(() => {
+    if (ttsError && visitStarted && !isRecording && !isConnecting && !isFinalizing && stepState !== 'saved') {
+      void startRecordingRef.current(language);
+    }
+  }, [isConnecting, isRecording, isFinalizing, language, stepState, ttsError, visitStarted]);
+
+  const startVisit = () => {
+    setVisitStarted(true);
+    setStepState('listening');
+    const greeting = language === 'en-IN'
+      ? 'Namaste! I am your AI assistant. Please tell me the visit notes. You can share all the details together.'
+      : language === 'hi-IN'
+        ? 'नमस्ते! मैं आपका एआई सहायक हूँ। कृपया भेंट की जानकारी बताइए। आप सभी विवरण एक साथ बता सकती हैं।'
+        : language === 'kn-IN'
+          ? 'ನಮಸ್ಕಾರ! ನಾನು ನಿಮ್ಮ AI ಸಹಾಯಕ. ದಯವಿಟ್ಟು ಭೇಟಿಯ ವಿವರಗಳನ್ನು ತಿಳಿಸಿ. ಎಲ್ಲಾ ವಿವರಗಳನ್ನು ಒಟ್ಟಿಗೆ ಹೇಳಬಹುದು.'
+          : currentLangObj.spoken.ai_disclosure;
+    addJudgeLog('AI_GREETING', greeting);
+    speak(greeting, language, voice, () => {
+      setStepState('listening');
+      void startRecordingRef.current(language);
+    });
+  };
 
   // Toggle Microphone
   const handleToggleMic = () => {
+    if (isFinalizing) return;
+    if (isConnecting) {
+      stopRecording();
+      return;
+    }
     // Barge-in: User tap or speaking interrupts agent speech instantly
     if (isPlaying) {
       stopAudio();
+      setVisitStarted(true);
       addJudgeLog('BARGE_IN', 'Agent speech interrupted instantly by user');
       if (!isRecording) {
         setStepState('listening');
-        void startRecording(language);
+        void startRecordingRef.current(language);
         return;
       }
     }
@@ -646,13 +825,12 @@ export default function App() {
         void processUtterance(transcript.trim());
       }
     } else {
-      const currentLang = LANGUAGE_CATALOG[language] || LANGUAGE_CATALOG['en-IN'];
-      // First turn AI disclosure:
-      speak(currentLang.spoken.ai_disclosure, language, voice, () => {
-        startRecording(language);
+      if (!visitStarted) {
+        startVisit();
+      } else {
         setStepState('listening');
-      });
-      addJudgeLog('AI_DISCLOSURE', currentLang.spoken.ai_disclosure);
+        void startRecordingRef.current(language);
+      }
     }
   };
 
@@ -668,6 +846,8 @@ export default function App() {
     stopAudio();
     pipelineSessionIdRef.current = `visit-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     setPipelineFields({});
+    setFieldUpdates([]);
+    setVisitStarted(false);
     awaitingSaveConfirmationRef.current = false;
     lastProcessedTranscriptRef.current = '';
     setDangerResult(null);
@@ -678,7 +858,7 @@ export default function App() {
     setReadyToConfirm(false);
     setBeneficiarySearch('');
     setActiveQuestion(null);
-    setStepState('listening');
+    setStepState('start');
     addJudgeLog('NEXT_BENEFICIARY', 'Session reset for new home visit');
   };
 
@@ -687,6 +867,8 @@ export default function App() {
     stopAudio();
     pipelineSessionIdRef.current = `visit-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     setPipelineFields({});
+    setFieldUpdates([]);
+    setVisitStarted(false);
     setSavedFollowups(null);
     setSavedRecordId(null);
     setReadyToConfirm(false);
@@ -695,8 +877,8 @@ export default function App() {
     setTranscript('');
     setDangerResult(null);
     setExtractedJson(null);
-    setStepState('listening');
-    handleToggleMic();
+    setStepState('start');
+    startVisit();
   };
 
   const handleCancelVisit = () => {
@@ -748,7 +930,16 @@ export default function App() {
   };
 
   const currentLangObj = LANGUAGE_CATALOG[language] || LANGUAGE_CATALOG['en-IN'];
+  const startVisitLabel = language === 'hi-IN'
+    ? 'भेंट शुरू करें'
+    : language === 'kn-IN'
+      ? 'ಭೇಟಿ ಪ್ರಾರಂಭಿಸಿ'
+      : 'Start visit';
   const activeError = sttError || ttsError || workflowError;
+  const selectLanguage = (nextLanguage: LanguageCode) => {
+    setLanguage(nextLanguage);
+    setVoice(LANGUAGE_CATALOG[nextLanguage]?.defaultVoice || LANGUAGE_CATALOG['en-IN'].defaultVoice);
+  };
 
   return (
     <div
@@ -783,7 +974,7 @@ export default function App() {
       {/* Top Header */}
       <Header
         currentLanguage={language}
-        onSelectLanguage={setLanguage}
+        onSelectLanguage={selectLanguage}
         noiseMode={noiseMode}
         audioLevel={audioLevel}
         showJudgeView={showJudgeView}
@@ -799,11 +990,17 @@ export default function App() {
           <div className="p-3 bg-red-50 border border-red-300 rounded-xl flex items-start gap-2.5 shadow-sm text-red-900">
             <XCircle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
             <div className="flex-1 text-xs">
-              <span className="font-bold block">Live Voice Service Notice:</span>
+              <span className="font-bold block">
+                {workflowError ? 'Visit workflow notice:' : 'Live Voice Service Notice:'}
+              </span>
               <p className="mt-0.5 text-red-800">{activeError.message}</p>
               <div className="mt-2 flex items-center gap-2">
                 <button
                   onClick={() => {
+                    if (workflowError) {
+                      void retryWorkflow();
+                      return;
+                    }
                     if (ttsError) {
                       clearTTSError();
                       retryTTS();
@@ -815,7 +1012,7 @@ export default function App() {
                   className="px-3 py-1 bg-red-600 text-white rounded-lg font-bold text-xs flex items-center gap-1 hover:bg-red-700 active:scale-95 transition"
                 >
                   <RefreshCw className="w-3 h-3" />
-                  {ttsError ? 'Retry TTS' : 'Retry Voice Call'}
+                  {workflowError ? 'Retry visit' : ttsError ? 'Retry TTS' : 'Retry Voice Call'}
                 </button>
                 <button
                   onClick={() => {
@@ -832,10 +1029,65 @@ export default function App() {
         </div>
       )}
 
+      {beneficiaryNotice && (
+        <div
+          className="fixed top-20 right-4 z-50 w-[min(24rem,calc(100vw-2rem))] rounded-2xl border border-emerald-300 bg-white p-4 shadow-xl"
+          role="status"
+          aria-live="polite"
+        >
+          <div className="flex items-start gap-3">
+            <CheckCircle2 className="mt-0.5 h-6 w-6 shrink-0 text-emerald-600" />
+            <div className="min-w-0 flex-1">
+              <p className="font-bold text-emerald-900">
+                {beneficiaryNotice.status === 'created'
+                  ? 'Beneficiary successfully added!'
+                  : 'Existing beneficiary matched.'}
+              </p>
+              <p className="mt-1 text-sm text-gray-700">
+                {beneficiaryNotice.beneficiary.name}
+                {beneficiaryNotice.beneficiary.age !== null
+                  ? ` · ${beneficiaryNotice.beneficiary.age} years`
+                  : ''}
+              </p>
+              <p className="text-sm text-gray-600">
+                House {beneficiaryNotice.beneficiary.house_no}
+                {beneficiaryNotice.beneficiary.village
+                  ? ` · ${beneficiaryNotice.beneficiary.village}`
+                  : ''}
+              </p>
+              <p className="text-xs text-gray-500">Beneficiary ID: {beneficiaryNotice.beneficiary.id}</p>
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveTab('visit');
+                  setBeneficiaryNotice(null);
+                  if (beneficiaryNoticeTimeoutRef.current !== null) {
+                    window.clearTimeout(beneficiaryNoticeTimeoutRef.current);
+                    beneficiaryNoticeTimeoutRef.current = null;
+                  }
+                }}
+                className="mt-3 rounded-lg bg-emerald-700 px-3 py-2 text-sm font-bold text-white hover:bg-emerald-800"
+              >
+                Continue to visit
+              </button>
+            </div>
+            <button
+              type="button"
+              aria-label="Dismiss beneficiary notice"
+              onClick={() => setBeneficiaryNotice(null)}
+              className="rounded p-1 text-gray-500 hover:bg-gray-100"
+            >
+              <XCircle className="h-5 w-5" />
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Main Container */}
-      <main className="flex-1 max-w-md w-full mx-auto px-4 pt-3 pb-24">
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 pt-3 pb-24">
         {activeTab === 'visit' && (
-          <div className="space-y-3">
+          <div className="space-y-3 md:grid md:grid-cols-2 md:gap-6 md:space-y-0 md:items-start">
+            <section className="space-y-3 md:sticky md:top-24">
             {/* Short First-Run Hint */}
             <OnboardingHints />
 
@@ -905,16 +1157,35 @@ export default function App() {
               micState={
                 isRecording
                   ? 'listening'
+                  : isFinalizing
+                  ? 'thinking'
+                  : isConnecting
+                  ? 'connecting'
                   : isPlaying
                   ? 'speaking'
                   : stepState === 'checking'
                   ? 'thinking'
+                  : sttError || ttsError || workflowError
+                  ? 'error'
                   : 'idle'
               }
               audioLevel={audioLevel}
               onToggleRecord={handleToggleMic}
-              tapToSpeakLabel={currentLangObj.ui.tap_to_speak}
+              onRetry={() => {
+                if (workflowError && !sttError && !ttsError) void retryWorkflow();
+                else handleToggleMic();
+              }}
+              tapToSpeakLabel={visitStarted ? currentLangObj.ui.tap_to_speak : startVisitLabel}
               stopListeningLabel={currentLangObj.ui.stop_listening}
+              helperText={isPlaying
+                ? 'Tap to interrupt and speak a correction.'
+                : isConnecting
+                  ? 'Connecting to the microphone and Gnani speech service…'
+                  : isFinalizing
+                    ? 'Finishing speech recognition…'
+                  : visitStarted
+                    ? 'Your spoken notes are kept together for this visit.'
+                    : 'Start with a spoken greeting; no typing is needed.'}
             />
 
             {/* Live Transcript & Agent Caption */}
@@ -923,15 +1194,22 @@ export default function App() {
               isListening={isRecording}
               agentCaption={currentCaption}
             />
+            </section>
 
             {/* Form Cards with Color Chips */}
-            <div className="space-y-2 pt-1">
+            <section className="space-y-2 pt-1 md:max-h-[calc(100vh-12rem)] md:overflow-y-auto md:pr-2">
               <div className="flex items-center justify-between text-xs font-bold text-gray-500 uppercase tracking-wider px-1">
                 <span>Verified Field Register</span>
                 <span className="text-[10px] text-teal-700 font-normal">
                   Tap card to view evidence trail
                 </span>
               </div>
+              {fieldUpdates.length > 0 && (
+                <div className="rounded-xl border border-teal-200 bg-teal-50 p-3 text-sm text-teal-950" aria-live="polite">
+                  <p className="mb-1 font-bold">Register updates</p>
+                  {fieldUpdates.slice(-5).map((update, index) => <p key={`${index}-${update}`}>{update}</p>)}
+                </div>
+              )}
 
               {/* Beneficiary Card */}
               <FieldCard
@@ -1097,10 +1375,11 @@ export default function App() {
                   />
                 );
               })}
-            </div>
+            </section>
 
             {/* Post-Save Summary and Spoken Follow-up Checklist */}
             {savedFollowups && (
+              <div className="md:col-span-2">
               <FollowupSummary
                 beneficiaryName={formData.beneficiaryName || ''}
                 beneficiaryId={formData.beneficiaryId || ''}
@@ -1111,6 +1390,7 @@ export default function App() {
                   savedRecordId ? updateFollowup(savedRecordId, followupId, completed) : Promise.resolve()
                 }
               />
+              </div>
             )}
 
             {/* Bottom Actions Bar */}
@@ -1163,7 +1443,7 @@ export default function App() {
         {activeTab === 'settings' && (
           <SettingsScreen
             currentLanguage={language}
-            onSelectLanguage={setLanguage}
+            onSelectLanguage={selectLanguage}
             selectedVoice={voice}
             onSelectVoice={setVoice}
             textSize={textSize}

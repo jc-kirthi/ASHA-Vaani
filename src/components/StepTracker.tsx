@@ -1,5 +1,5 @@
 import React from 'react';
-import { Mic, CheckCircle2, ShieldCheck, BookmarkCheck } from 'lucide-react';
+import { Mic, CheckCircle2, ShieldCheck, BookmarkCheck, Play } from 'lucide-react';
 import { StepState } from '../types';
 
 interface StepTrackerProps {
@@ -7,6 +7,7 @@ interface StepTrackerProps {
 }
 
 const STEPS: Array<{ key: StepState; label: string; icon: React.FC<{ className?: string }> }> = [
+  { key: 'start', label: 'Start', icon: Play },
   { key: 'listening', label: 'Listening', icon: Mic },
   { key: 'checking', label: 'Checking', icon: ShieldCheck },
   { key: 'confirm', label: 'Confirm', icon: CheckCircle2 },
@@ -16,10 +17,11 @@ const STEPS: Array<{ key: StepState; label: string; icon: React.FC<{ className?:
 export const StepTracker: React.FC<StepTrackerProps> = ({ currentStep }) => {
   const getStepIndex = (s: StepState) => {
     switch (s) {
-      case 'listening': return 0;
-      case 'checking': return 1;
-      case 'confirm': return 2;
-      case 'saved': return 3;
+      case 'start': return 0;
+      case 'listening': return 1;
+      case 'checking': return 2;
+      case 'confirm': return 3;
+      case 'saved': return 4;
       default: return 0;
     }
   };

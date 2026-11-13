@@ -14,6 +14,7 @@ __pycache__/
 *.db
 *.sqlite
 data/cache/
+data/sandbox/
 data/beneficiaries.json
 data/visit_records.json
 .venv/

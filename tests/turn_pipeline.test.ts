@@ -17,9 +17,10 @@ await fs.writeFile(rosterFile, JSON.stringify([
   { id: 'TEST-002', name: 'Sita Devi', house_no: '40', village: 'Rampur', category: 'PNC', age: 22 },
 ]), 'utf8');
 
-const { processTurn, resetTurnSessions, decryptSavedTurn } = await import('../server/turn.ts');
+const { processTurn, previewVisitFields, resetTurnSessions, decryptSavedTurn } = await import('../server/turn.ts');
 const { listVisitRecords, saveVisitRecord, updateVisitFollowup } = await import('../server/records.ts');
 const { evaluateDangerSigns } = await import('../src/engine/dangerEngine.ts');
+const { createSpeechEndpointDetector } = await import('../src/engine/speechEndpointing.ts');
 const results: string[] = [];
 
 async function turn(id: string, transcript: string, language = 'en-IN') {
@@ -32,6 +33,54 @@ async function casePass(name: string, action: () => Promise<void>) {
 }
 
 async function main() {
+  await casePass('00 silence endpoint ignores pauses and noise, finalizes once, and resets', async () => {
+    const detector = createSpeechEndpointDetector({
+      silenceDurationMs: 500,
+      minimumSpeechMs: 250,
+      minimumTurnMs: 500,
+      minimumRms: 0.012,
+    });
+    for (const time of [0, 100, 200, 300, 400]) detector.observe(0.04, time);
+    assert.equal(detector.observe(0, 500), false);
+    assert.equal(detector.observe(0, 700), false);
+    assert.equal(detector.observe(0.04, 800), false);
+    assert.equal(detector.observe(0, 900), false);
+    assert.equal(detector.observe(0, 1200), false);
+    assert.equal(detector.observe(0, 1300), true);
+    assert.equal(detector.observe(0, 1400), false);
+    detector.reset();
+    for (const time of [0, 100, 200, 300, 400]) detector.observe(0.04, time);
+    assert.equal(detector.observe(0, 900), true);
+
+    const noiseDetector = createSpeechEndpointDetector({ silenceDurationMs: 500 });
+    for (let time = 0; time <= 2000; time += 100) {
+      assert.equal(noiseDetector.observe(0.009, time), false);
+    }
+    const transientDetector = createSpeechEndpointDetector();
+    transientDetector.observe(0.04, 0);
+    transientDetector.observe(0.04, 100);
+    for (let time = 200; time <= 2500; time += 100) {
+      assert.equal(transientDetector.observe(0, time), false);
+    }
+  });
+
+  await casePass('00b name age house and weight are retained and not re-asked', async () => {
+    resetTurnSessions();
+    const result = await turn('case-00b', 'Rani is 25 years old, house number 88, weight 56 kg');
+    assert.equal(result.fields.name.value, 'Rani');
+    assert.equal(result.fields.age.value, 25);
+    assert.equal(result.fields.houseNo.value, '88');
+    assert.equal(result.fields.weight.value, 56);
+    assert.doesNotMatch(result.questions[0] || '', /name|age|house|weight/i);
+  });
+
+  await casePass('00c name alone does not report beneficiary registration', async () => {
+    resetTurnSessions();
+    const result = await turn('case-00c', 'Nora');
+    assert.equal(result.beneficiary_result, null);
+    assert.notEqual(result.roster_label, 'created');
+  });
+
   await casePass('01 complete intake asks only last ANC date', async () => {
     resetTurnSessions();
     const result = await turn('case-01', 'Kumari, 24 years old, ANC, seven months pregnant, house 15, weight 58 kilo, BP 110 by 70, not taking IFA regularly, no bleeding');
@@ -63,12 +112,59 @@ async function main() {
 
   await casePass('04 active heavy bleeding and fever flags and refers', async () => {
     resetTurnSessions();
-    const result = await turn('case-04', 'Sunita Sharma has heavy bleeding and high fever');
+    const result = await turn(
+      'case-04',
+      'Sunita Sharma, 25 years old, ANC, seven months pregnant, house 15, weight 55 kilo, BP 120 by 80, IFA taken regularly, last ANC date 2026-10-20, TT two doses last dose 2026-08-01, heavy bleeding and high fever'
+    );
     assert.equal(result.danger.decision, 'FLAG');
     assert.ok(result.referral_slip);
     assert.equal(result.saved, false);
     assert.ok(result.read_back_text);
     assert.equal((await turn('case-04', 'yes')).saved, true);
+  });
+
+  await casePass('21 rejecting read-back does not save and permits a correction', async () => {
+    resetTurnSessions();
+    await turn(
+      'case-21',
+      'Nila, 25 years old, ANC, seven months pregnant, house 94, weight 55 kilo, BP 120 by 80, IFA taken regularly, last ANC date 2026-10-20, TT two doses last dose 2026-08-01'
+    );
+    const rejected = await turn('case-21', 'no');
+    assert.equal(rejected.saved, false);
+    assert.match(rejected.questions[0], /correct/i);
+    const corrected = await turn('case-21', 'No, weight is 58 kg');
+    assert.equal(corrected.fields.weight.value, 58);
+    const saved = await turn('case-21', 'yes');
+    assert.equal(saved.saved_record?.weight, 58);
+  });
+
+  await casePass('22 live field preview is provisional and preserves a confirmed value', async () => {
+    resetTurnSessions();
+    await turn(
+      'case-22',
+      'Maya, 26 years old, ANC, seven months pregnant, house 21, weight 55 kilo, BP 110 by 70, IFA taken regularly'
+    );
+    const preview = previewVisitFields('case-22', 'weight 58 kg', 'en-IN');
+    assert.equal(preview.weight.value, 55);
+    assert.equal(preview.weight.state, 'uncertain');
+    assert.match(preview.weight.evidence, /58/);
+  });
+
+  await casePass('23 danger alert remains while missing required register details are asked', async () => {
+    resetTurnSessions();
+    const result = await turn('case-23', 'Sunita has heavy bleeding and high fever');
+    assert.equal(result.danger.decision, 'FLAG');
+    assert.equal(result.read_back_text, null);
+    assert.equal(result.saved, false);
+    assert.doesNotMatch(result.questions[0], /save/i);
+  });
+
+  await casePass('24 Hindi and Kannada native-script danger signs handle negation and uncertainty', async () => {
+    assert.equal(evaluateDangerSigns('रक्तस्राव नहीं है', 'hi-IN').decision, 'CLEAR');
+    assert.equal(evaluateDangerSigns('रक्तस्राव हो रहा है', 'hi-IN').decision, 'FLAG');
+    assert.equal(evaluateDangerSigns('शायद रक्तस्राव है', 'hi-IN').decision, 'ASK');
+    assert.equal(evaluateDangerSigns('ರಕ್ತಸ್ರಾವ ಇಲ್ಲ', 'kn-IN').decision, 'CLEAR');
+    assert.equal(evaluateDangerSigns('ರಕ್ತಸ್ರಾವ ಆಗುತ್ತಿದೆ', 'kn-IN').decision, 'FLAG');
   });
 
   await casePass('05 explicit no bleeding clears', async () => {
@@ -101,11 +197,28 @@ async function main() {
     assert.match(result.questions[0], /which house/i);
   });
 
+  await casePass('09b existing beneficiary is linked without creating a duplicate', async () => {
+    resetTurnSessions();
+    const before = JSON.parse(await fs.readFile(rosterFile, 'utf8')) as Array<{ id: string }>;
+    const result = await turn(
+      'case-09b',
+      'Sita Devi, 24 years old, ANC, seven months pregnant, house 12, Rampur, weight 55 kilo, BP 120 by 80, IFA taken regularly, last ANC date 2026-10-01, TT two doses last dose 2026-08-01'
+    );
+    const after = JSON.parse(await fs.readFile(rosterFile, 'utf8')) as Array<{ id: string }>;
+    assert.equal(result.beneficiary_result?.status, 'existing');
+    assert.equal(result.beneficiary_result?.beneficiary.id, 'TEST-001');
+    assert.equal(after.length, before.length);
+    assert.equal(result.duplicate_candidates.length, 0);
+  });
+
   await casePass('10 unknown name creates once and reuses it', async () => {
     resetTurnSessions();
     const first = await turn('case-10', 'Zoya, ANC, seven months pregnant, house 89');
     const second = await turn('case-10', 'Zoya is at house 89 for follow-up');
     assert.equal(first.roster_label, 'created');
+    assert.equal(first.beneficiary_result?.status, 'created');
+    assert.equal(first.beneficiary_result?.beneficiary.id, first.fields.beneficiaryId.value);
+    assert.equal(first.beneficiary_result?.beneficiary.house_no, '89');
     assert.equal(second.roster_label, null);
     assert.equal(second.fields.name.value, 'Zoya');
   });
@@ -131,6 +244,7 @@ async function main() {
     assert.equal(saved.saved, true);
     assert.ok(saved.followups.some((item) => item.item.includes('Day 14')));
     assert.ok(saved.followups.some((item) => item.item.includes('6-Week')));
+    assert.ok(saved.followups.every((item) => item.ruleVersion === 'draft-v1'));
   });
 
   await casePass('14 encrypted save decrypts with deterministic followups', async () => {

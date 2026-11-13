@@ -47,7 +47,7 @@ export const DangerBanner: React.FC<DangerBannerProps> = ({
 
           <p className="text-sm font-bold text-red-100 mt-1 flex items-center gap-1.5">
             <ArrowRight className="w-4 h-4 shrink-0" />
-            Seek urgent in-person clinical assessment now. This tool does not replace emergency care.
+            Refer to PHC now. This tool does not replace emergency care.
           </p>
         </div>
       </div>

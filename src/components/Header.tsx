@@ -32,7 +32,7 @@ export const Header: React.FC<HeaderProps> = ({
 
   return (
     <header className="sticky top-0 z-40 bg-white/95 backdrop-blur border-b border-teal-100 shadow-xs px-4 py-2.5">
-      <div className="max-w-md mx-auto flex items-center justify-between gap-2">
+      <div className="max-w-7xl mx-auto flex items-center justify-between gap-2">
         {/* App Branding */}
         <div className="flex items-center gap-2">
           <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-teal-600 to-emerald-500 flex items-center justify-center text-white shadow-sm">
@@ -40,6 +40,18 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
           <div>
             <div className="flex items-center gap-1.5">
+              <label className="sr-only" htmlFor="visit-language">Visit language</label>
+              <select
+                id="visit-language"
+                value={currentLanguage}
+                onChange={(event) => onSelectLanguage(event.target.value as LanguageCode)}
+                className="max-w-28 rounded-lg border border-gray-300 bg-white px-2 py-2 text-xs font-semibold text-gray-800"
+              >
+                {Object.values(LANGUAGE_CATALOG).map((lang) => (
+                  <option key={lang.code} value={lang.code}>{lang.nativeName}</option>
+                ))}
+              </select>
+
               <button
                 type="button"
                 onClick={onRetryHealth}
