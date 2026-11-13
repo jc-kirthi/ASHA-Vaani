@@ -1470,20 +1470,6 @@ export default function App() {
                 );
               })}
 
-            {/* Post-Save Summary and Spoken Follow-up Checklist */}
-            {savedFollowups && (
-              <FollowupSummary
-                beneficiaryName={formData.beneficiaryName || ''}
-                beneficiaryId={formData.beneficiaryId || ''}
-                followups={savedFollowups}
-                onNextBeneficiary={handleNextBeneficiary}
-                onViewRecords={() => setActiveTab('records')}
-                onCompleteFollowup={(followupId, completed) =>
-                  savedRecordId ? updateFollowup(savedRecordId, followupId, completed) : Promise.resolve()
-                }
-              />
-            )}
-
             {/* Bottom Actions Bar */}
             {!savedFollowups && (
               <div className="pt-2 flex flex-wrap items-center gap-2">
@@ -1515,6 +1501,20 @@ export default function App() {
             )}
             </section>
           </div>
+        )}
+
+        {/* Post-Save Summary and Spoken Follow-up Checklist */}
+        {activeTab === 'visit' && savedFollowups && (
+          <FollowupSummary
+            beneficiaryName={formData.beneficiaryName || ''}
+            beneficiaryId={formData.beneficiaryId || ''}
+            followups={savedFollowups}
+            onNextBeneficiary={handleNextBeneficiary}
+            onViewRecords={() => setActiveTab('records')}
+            onCompleteFollowup={(followupId, completed) =>
+              savedRecordId ? updateFollowup(savedRecordId, followupId, completed) : Promise.resolve()
+            }
+          />
         )}
 
         {/* Tab 2: Saved Records Register */}

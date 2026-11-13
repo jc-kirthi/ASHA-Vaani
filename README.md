@@ -11,13 +11,21 @@ ASHA Vaani is a voice-register prototype. Finalized transcripts are sent through
 npm run dev
 ```
 
-Starts the unified backend and frontend on port 3000 (`http://localhost:3000`). Gnani Prisma STT and Timbre TTS use backend WebSocket proxies. Timbre audio chunks are played as they arrive when the browser can decode each chunk; if not, the client combines the received chunks and decodes the completed audio.
+This is the standard application mode. It starts the unified backend and frontend on port 3000 (`http://localhost:3000`) and uses the normal beneficiary and visit registers. Gnani Prisma STT and Timbre TTS use backend WebSocket proxies. Timbre audio chunks are played as they arrive when the browser can decode each chunk; if not, the client combines the received chunks and decodes the completed audio.
 
-For isolated local testing, use:
+### Optional isolated sandbox
+
+Use the sandbox only for local demos or testing; it is not a replacement for the standard application mode and must not be used as the project's normal register:
+
 ```bash
 npm run dev:sandbox
 ```
-This runs the same backend on port 3001 by default against `data/sandbox/` instead of the normal beneficiary and visit files, so testing does not touch the existing register or a normal port-3000 instance. Set `PORT` to override the port. Use synthetic, de-identified visit details. The sandbox files are ignored by Git.
+
+It runs on port 3001 by default and uses `data/sandbox/` instead of the normal beneficiary and visit files. The sandbox is isolated: it does not replace, copy over, or write to the standard registers or a normal port-3000 instance. Use only synthetic, de-identified visit details. Sandbox files are ignored by Git. Set `PORT` to override the sandbox port.
+
+The sandbox disables Vite hot-module replacement. After changing source files, refresh the browser or restart the sandbox server to see the latest interface.
+
+The **Start Demo** control is for the sandbox's repeatable synthetic visit only. Use `npm run dev` for the standard application workflow.
 
 To check the configured backend health:
 ```bash
@@ -38,6 +46,13 @@ npm run test:workflow
 python tests/test_all.py
 python scripts/eval.py
 ```
+
+### Interface overview
+
+- **Home Visit** is the voice-entry workspace. Search for a patient, then use the microphone to capture visit notes; the step tracker shows the visit progressing through extraction, validation, safety checks, confirmation, and saving.
+- The transcript and spoken response are shown alongside the verified field register. Select a field card to inspect its evidence or correct a value before saving.
+- After saving, the follow-up checklist appears below the visit workspace across the page. The page scrolls as one view so the checklist does not overlap pinned visit controls.
+- **Register** shows saved visits and follow-up tasks. **Settings** contains the available language and voice preferences.
 
 ---
 
