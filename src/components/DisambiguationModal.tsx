@@ -29,7 +29,7 @@ export const DisambiguationModal: React.FC<DisambiguationModalProps> = ({
           <div>
             <h3 className="text-base font-bold text-gray-900">Duplicate Name Found</h3>
             <p className="text-xs text-gray-500 font-medium">
-              Beneficiary Roster Disambiguation
+              Patient Roster Disambiguation
             </p>
           </div>
         </div>

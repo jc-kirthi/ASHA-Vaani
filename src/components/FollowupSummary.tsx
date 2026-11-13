@@ -31,7 +31,7 @@ export const FollowupSummary: React.FC<FollowupSummaryProps> = ({
             Visit successfully saved!
           </h3>
           <p className="text-xs text-emerald-700 font-medium">
-            Beneficiary: {beneficiaryName} ({beneficiaryId})
+            Patient: {beneficiaryName} ({beneficiaryId})
           </p>
         </div>
       </div>
@@ -98,7 +98,7 @@ export const FollowupSummary: React.FC<FollowupSummaryProps> = ({
           className="flex-1 py-3 px-4 rounded-xl bg-teal-600 hover:bg-teal-700 text-white font-bold text-sm shadow-sm flex items-center justify-center gap-2 transition"
         >
           <PlusCircle className="w-4 h-4" />
-          Next Beneficiary
+          Next Patient
         </button>
 
         <button

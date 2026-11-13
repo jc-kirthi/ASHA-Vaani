@@ -17,7 +17,7 @@ const app = express();
 const server = http.createServer(app);
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = '0.0.0.0';
-const PROJECT_ROOT = path.dirname(fileURLToPath(import.meta.url));
+const PROJECT_ROOT = process.env.ASHA_PROJECT_ROOT || path.dirname(fileURLToPath(import.meta.url));
 const BENEFICIARIES_FILE = process.env.ASHA_BENEFICIARIES_FILE ||
   path.join(PROJECT_ROOT, 'data', 'beneficiaries.json');
 
@@ -504,9 +504,14 @@ async function checkHealth(): Promise<HealthStatus> {
 async function readNewBeneficiaries(): Promise<BeneficiaryRecord[]> {
   try {
     const content = await fs.readFile(BENEFICIARIES_FILE, 'utf8');
-    const parsed: unknown = JSON.parse(content);
-    if (!Array.isArray(parsed)) throw new Error('Stored beneficiary data is invalid.');
-    return parsed as BeneficiaryRecord[];
+    const parsed: unknown = JSON.parse(content.replace(/^\uFEFF/, ''));
+    const values = Array.isArray(parsed)
+      ? parsed
+      : parsed && typeof parsed === 'object' && Array.isArray((parsed as { value?: unknown }).value)
+        ? (parsed as { value: unknown[] }).value
+        : null;
+    if (!values) throw new Error('Stored beneficiary data is invalid.');
+    return values as BeneficiaryRecord[];
   } catch (error) {
     if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') return [];
     throw error;

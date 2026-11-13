@@ -96,13 +96,13 @@ export const RecordsScreen: React.FC<RecordsScreenProps> = ({
       </div>
 
       <div className="p-3 bg-white rounded-xl border border-gray-200 flex items-center justify-between">
-        <span className="text-xs font-bold text-gray-700">Beneficiaries ({filteredBeneficiaries.length})</span>
+          <span className="text-xs font-bold text-gray-700">Patients ({filteredBeneficiaries.length})</span>
         <button
           type="button"
           onClick={() => setAddingBeneficiary((value) => !value)}
           className="px-2.5 py-1.5 rounded-lg bg-teal-50 border border-teal-200 text-teal-800 text-xs font-bold"
         >
-          Add beneficiary
+          Add patient
         </button>
       </div>
       {addingBeneficiary && (
@@ -139,7 +139,7 @@ export const RecordsScreen: React.FC<RecordsScreenProps> = ({
             disabled={savingBeneficiary || !newName.trim() || !newHouseNo.trim() || !newVillage.trim()}
             className="w-full py-2 rounded-lg bg-teal-600 text-white text-xs font-bold disabled:opacity-50"
           >
-            {savingBeneficiary ? 'Saving…' : 'Save beneficiary'}
+            {savingBeneficiary ? 'Saving…' : 'Register patient'}
           </button>
         </div>
       )}
@@ -239,7 +239,7 @@ export const RecordsScreen: React.FC<RecordsScreenProps> = ({
       {filtered.length === 0 ? (
         <div className="p-8 text-center bg-white rounded-2xl border border-gray-100 shadow-2xs space-y-2">
           <FileText className="w-10 h-10 text-gray-300 mx-auto" />
-          <h4 className="text-base font-bold text-gray-700">No Register Records Found</h4>
+          <h4 className="text-base font-bold text-gray-700">No Patient Register Records Found</h4>
           <p className="text-xs text-gray-500 max-w-xs mx-auto">
             Saved home visit records will be stored encrypted here with immediate danger flag badges.
           </p>

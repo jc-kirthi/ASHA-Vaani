@@ -25,7 +25,7 @@
 - **[Visual]**: Roster check identifies multiple Sita Devis in Rampur village.
 - **[Audio (ASHA Vaani)]**: *"सीता देवी नाम की दो लाभार्थी हैं - मकान नंबर 12 या मकान नंबर 40?"*
 - **[Demonstrator speaks]**: *"Makan number 12."*
-- **[Visual]**: Beneficiary confirmed: Sita Devi (House 12, ANC Trimester 2).
+- **[Visual]**: Patient confirmed: Sita Devi (House 12, ANC Trimester 2).
 - **[Speaker]**: *"Notice the weight field: our dual-method normalizer re-parsed 'do aath' as exactly 2.80 kg. If I tap the weight card, the full Evidence Trail appears, showing verbatim transcript offsets and detector origin. Nothing is ever overwritten without verification."*
 
 ---

@@ -38,7 +38,7 @@
 ## Slide 5: Key Novel Features
 - **Sound-Alike Number Guard**: Disambiguates phonetically confusable numbers (e.g. saat/saath, chaar/chaalis, pandrah/pachaas) with forced digit-by-digit spoken confirmation.
 - **Auditable Evidence Trail**: Every field stores verbatim source words, audio timestamps, detector origin, and complete revision histories.
-- **Beneficiary Roster & Disambiguation**: 30 synthetic beneficiaries; automatically prompts house number disambiguation when identical names occur (e.g., Sita Devi House 12 vs House 40).
+- **Patient Roster & Disambiguation**: 30 synthetic patients; automatically prompts house number disambiguation when identical names occur (e.g., Sita Devi House 12 vs House 40).
 - **One-Click PHC Referral Slip**: Instant factual handover slips (facts only, no drug/treatment advice) generated immediately upon obstetric danger detection.
 
 ---

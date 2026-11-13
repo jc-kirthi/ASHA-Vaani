@@ -6,12 +6,15 @@ interface StepTrackerProps {
   currentStep: StepState;
 }
 
-const STEPS: Array<{ key: StepState; label: string; icon: React.FC<{ className?: string }> }> = [
+const STEPS: Array<{ key: string; label: string; icon: React.FC<{ className?: string }> }> = [
   { key: 'start', label: 'Start', icon: Play },
   { key: 'listening', label: 'Listening', icon: Mic },
-  { key: 'checking', label: 'Checking', icon: ShieldCheck },
-  { key: 'confirm', label: 'Confirm', icon: CheckCircle2 },
-  { key: 'saved', label: 'Saved', icon: BookmarkCheck },
+  { key: 'extracting', label: 'Extracting', icon: ShieldCheck },
+  { key: 'checking', label: 'Validating', icon: ShieldCheck },
+  { key: 'safety', label: 'Safety', icon: ShieldCheck },
+  { key: 'confirm', label: 'Confirming', icon: CheckCircle2 },
+  { key: 'saving', label: 'Saving', icon: BookmarkCheck },
+  { key: 'saved', label: 'Completed', icon: BookmarkCheck },
 ];
 
 export const StepTracker: React.FC<StepTrackerProps> = ({ currentStep }) => {
@@ -19,9 +22,9 @@ export const StepTracker: React.FC<StepTrackerProps> = ({ currentStep }) => {
     switch (s) {
       case 'start': return 0;
       case 'listening': return 1;
-      case 'checking': return 2;
-      case 'confirm': return 3;
-      case 'saved': return 4;
+      case 'checking': return 3;
+      case 'confirm': return 5;
+      case 'saved': return 7;
       default: return 0;
     }
   };

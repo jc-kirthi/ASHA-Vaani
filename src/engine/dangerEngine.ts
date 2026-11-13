@@ -241,7 +241,7 @@ export function evaluateDangerSigns(
       });
       evidence.push({ signId: sign.id, name: sign.name, state: 'FLAG', reason: 'Current unnegated danger sign in symptom context' });
     } else if (uncertain) {
-      clarificationQuestions.push(`क्या लाभार्थी को ${sign.name} (खतरे का लक्षण) है? कृपया हाँ या ना बताएं।`);
+      clarificationQuestions.push(`क्या मरीज को ${sign.name} (खतरे का लक्षण) है? कृपया हाँ या ना बताएं।`);
       evidence.push({ signId: sign.id, name: sign.name, state: 'ASK', reason: 'Symptom status is uncertain, unreported, or only described in the past' });
     } else if (resolved) {
       evidence.push({ signId: sign.id, name: sign.name, state: 'CLEAR', reason: 'Symptom is negated or described as resolved in context' });

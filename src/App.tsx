@@ -17,6 +17,8 @@ import {
   RefreshCw,
   XCircle,
   Radio,
+  PlayCircle,
+  RotateCcw,
 } from 'lucide-react';
 
 import {
@@ -199,7 +201,7 @@ function getFieldUpdateMessages(
   next: Record<string, PipelineField>
 ): string[] {
   const labels: Record<string, string> = {
-    name: 'Beneficiary',
+    name: 'Patient',
     age: 'Age',
     visitType: 'Visit type',
     weight: 'Weight',
@@ -244,6 +246,9 @@ export default function App() {
   const [textSize, setTextSize] = useState<'normal' | 'large' | 'xl'>('normal');
   const [showJudgeView, setShowJudgeView] = useState<boolean>(false);
   const [serverTestMode, setServerTestMode] = useState(false);
+  const [demoMode, setDemoMode] = useState(false);
+  const [demoStage, setDemoStage] = useState<'idle' | 'running' | 'complete'>('idle');
+  const demoModeRef = useRef(false);
 
   // Visit State
   const [stepState, setStepState] = useState<StepState>('start');
@@ -295,6 +300,10 @@ export default function App() {
   useEffect(() => {
     pipelineFieldsRef.current = pipelineFields;
   }, [pipelineFields]);
+
+  useEffect(() => {
+    demoModeRef.current = demoMode;
+  }, [demoMode]);
 
   useEffect(() => () => {
     if (previewTimerRef.current !== null) window.clearTimeout(previewTimerRef.current);
@@ -554,7 +563,7 @@ export default function App() {
             if (rosterResponse.ok) setNewBeneficiaries(await rosterResponse.json());
           }).catch(() => {
             setWorkflowError({
-              message: 'Beneficiary was saved, but the roster could not be refreshed.',
+              message: 'Patient was saved, but the roster could not be refreshed.',
               canRetry: true,
             });
           });
@@ -562,7 +571,7 @@ export default function App() {
         if (result.duplicate_candidates.length) {
           setDisambiguationState({
             isOpen: true,
-            promptText: result.questions[0] || 'Select the beneficiary for this visit.',
+            promptText: result.questions[0] || 'Select the patient for this visit.',
             candidates: result.duplicate_candidates,
           });
         }
@@ -579,13 +588,13 @@ export default function App() {
             ? `${responseText} ${result.followups.map((item) => `${item.item}, due ${item.dueDate}`).join('. ')}`
             : responseText;
           speak(spokenText, language, voice, () => {
-            if (!result.saved && result.questions.length) {
+            if (!demoModeRef.current && !result.saved && result.questions.length) {
               void startRecordingRef.current(language);
             }
           });
         } else if (result.questions.length) {
           speak(result.questions[0], language, voice, () => {
-            void startRecordingRef.current(language);
+            if (!demoModeRef.current) void startRecordingRef.current(language);
           });
         }
         return;
@@ -633,7 +642,7 @@ export default function App() {
       setStepState(result.saved ? 'saved' : result.read_back_text ? 'confirm' : 'checking');
       if (result.read_back_text || result.answer_text) {
         speak(result.read_back_text || result.answer_text || '', language, voice, () => {
-          if (!result.saved && result.questions.length) void startRecordingRef.current(language);
+          if (!demoModeRef.current && !result.saved && result.questions.length) void startRecordingRef.current(language);
         });
       }
     } catch (error) {
@@ -777,16 +786,16 @@ export default function App() {
   }, [isFinalizing]);
 
   useEffect(() => {
-    if (ttsError && visitStarted && !isRecording && !isConnecting && !isFinalizing && stepState !== 'saved') {
+    if (ttsError && !demoMode && visitStarted && !isRecording && !isConnecting && !isFinalizing && stepState !== 'saved') {
       void startRecordingRef.current(language);
     }
-  }, [isConnecting, isRecording, isFinalizing, language, stepState, ttsError, visitStarted]);
+  }, [demoMode, isConnecting, isRecording, isFinalizing, language, stepState, ttsError, visitStarted]);
 
   const startVisit = () => {
     setVisitStarted(true);
     setStepState('listening');
     const greeting = language === 'en-IN'
-      ? 'Namaste! I am your AI assistant. Please tell me the visit notes. You can share all the details together.'
+      ? 'Namaste! I am your ASHA Vaani assistant. Please tell me the patient visit details. You can explain everything together.'
       : language === 'hi-IN'
         ? 'नमस्ते! मैं आपका एआई सहायक हूँ। कृपया भेंट की जानकारी बताइए। आप सभी विवरण एक साथ बता सकती हैं।'
         : language === 'kn-IN'
@@ -797,6 +806,71 @@ export default function App() {
       setStepState('listening');
       void startRecordingRef.current(language);
     });
+  };
+
+  const startDemo = async () => {
+    if (demoStage === 'running') return;
+    stopAudio();
+    stopRecording();
+    demoModeRef.current = true;
+    setDemoMode(true);
+    setDemoStage('running');
+    pipelineSessionIdRef.current = `demo-${Date.now()}`;
+    setPipelineFields({});
+    setFieldUpdates([]);
+    setDangerResult(null);
+    setTranscript('');
+    setExtractedJson(null);
+    setSavedFollowups(null);
+    setSavedRecordId(null);
+    setReadyToConfirm(false);
+    setActiveQuestion(null);
+    setVisitStarted(true);
+    setStepState('listening');
+    addJudgeLog('DEMO_STARTED', 'Synthetic demo session started; no live microphone or patient data used.');
+    const greeting = 'Namaste! I am your ASHA Vaani assistant. This is a simulated visit. Please review the patient details as they are captured.';
+    speak(greeting, language, voice);
+    const wait = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+    await wait(900);
+    const initial = 'Simulated transcript: Patient name is Lakshmi, patient ID DEMO-001, 26 years old, house 42 in Demo Nagar. She is pregnant, seven months. This is an ANC visit. Her blood pressure is 110 by 70. She takes IFA regularly. Her last ANC visit was 2026-10-20. She has received two TT doses. No bleeding or fever.';
+    setTranscript(initial);
+    await processUtterance(initial);
+    await wait(900);
+    await processUtterance('56 kilograms.');
+    await wait(900);
+    await processUtterance('Actually, the weight is 58 kilograms, not 56.');
+    await wait(900);
+    await submitCorrections({
+      name: 'Lakshmi',
+      beneficiaryId: 'DEMO-001',
+      age: 26,
+      houseNo: '42',
+      village: 'Demo Nagar',
+      visitType: 'ANC',
+      pregnancyMonths: 7,
+      gestationalWeeks: 28,
+      bpSystolic: 110,
+      bpDiastolic: 70,
+      weight: 58,
+      ifaStatus: 'regular',
+      lastAncDate: '2026-10-20',
+      ttStatus: '2 doses',
+      ttLastDoseDate: '2026-10-20',
+      symptoms: 'No bleeding or fever',
+    });
+    await wait(900);
+    await processUtterance('Yes, everything is correct. Save this visit.');
+    setDemoStage('complete');
+    addJudgeLog('DEMO_COMPLETED', 'Synthetic visit completed and saved through the real backend persistence path.');
+  };
+
+  const exitDemo = () => {
+    demoModeRef.current = false;
+    setDemoMode(false);
+    setDemoStage('idle');
+    stopAudio();
+    stopRecording();
+    addJudgeLog('DEMO_EXITED', 'Demo mode exited; live patient workflow is available.');
   };
 
   // Toggle Microphone
@@ -1040,8 +1114,8 @@ export default function App() {
             <div className="min-w-0 flex-1">
               <p className="font-bold text-emerald-900">
                 {beneficiaryNotice.status === 'created'
-                  ? 'Beneficiary successfully added!'
-                  : 'Existing beneficiary matched.'}
+                  ? 'Patient successfully registered'
+                  : 'Existing patient matched.'}
               </p>
               <p className="mt-1 text-sm text-gray-700">
                 {beneficiaryNotice.beneficiary.name}
@@ -1055,7 +1129,7 @@ export default function App() {
                   ? ` · ${beneficiaryNotice.beneficiary.village}`
                   : ''}
               </p>
-              <p className="text-xs text-gray-500">Beneficiary ID: {beneficiaryNotice.beneficiary.id}</p>
+              <p className="text-xs text-gray-500">Patient ID: {beneficiaryNotice.beneficiary.id}</p>
               <button
                 type="button"
                 onClick={() => {
@@ -1085,6 +1159,20 @@ export default function App() {
 
       {/* Main Container */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 pt-3 pb-24">
+        <section className="demo-panel mb-4" aria-label="Synthetic demo mode">
+          <div>
+            <p className="demo-kicker">Hackathon sandbox</p>
+            <h2>Repeatable voice visit demo</h2>
+            <p>Uses synthetic patient data, simulated transcript labels, and the real validation, danger, follow-up, and encrypted save path.</p>
+          </div>
+          <div className="demo-actions">
+            <button type="button" className="demo-button demo-button-primary" onClick={() => void startDemo()} disabled={demoStage === 'running'}>
+              <PlayCircle className="w-4 h-4" /> {demoStage === 'running' ? 'Demo running…' : demoStage === 'complete' ? 'Restart Demo' : 'Start Demo'}
+            </button>
+            {demoMode && <button type="button" className="demo-button" onClick={exitDemo}><RotateCcw className="w-4 h-4" /> Exit Demo</button>}
+          </div>
+          {demoMode && <p className="demo-status" aria-live="polite">{demoStage === 'complete' ? 'Demo complete — synthetic record saved. Danger FLAG / ASK / CLEAR rules remain available in Judge View.' : 'DEMO MODE: simulated transcript; no microphone input is being used.'}</p>}
+        </section>
         {activeTab === 'visit' && (
           <div className="space-y-3 md:grid md:grid-cols-2 md:gap-6 md:space-y-0 md:items-start">
             <section className="space-y-3 md:sticky md:top-24">
@@ -1093,7 +1181,7 @@ export default function App() {
 
             <section className="p-3 bg-white rounded-xl border border-gray-200 space-y-2">
               <label htmlFor="beneficiary-search" className="block text-sm font-bold text-gray-800">
-                Select a beneficiary
+                Select a patient
               </label>
               <input
                 id="beneficiary-search"
@@ -1211,9 +1299,9 @@ export default function App() {
                 </div>
               )}
 
-              {/* Beneficiary Card */}
+              {/* Patient Card */}
               <FieldCard
-                label="Beneficiary"
+                label="Patient"
                 value={
                   formData.beneficiaryName
                     ? `${formData.beneficiaryName}${formData.beneficiaryId
@@ -1226,7 +1314,7 @@ export default function App() {
                 icon={<UserCheck className="w-5 h-5" />}
                 onTap={() =>
                   setSelectedFieldModal({
-                    fieldName: 'Beneficiary Name & ID',
+                    fieldName: 'Patient Name & ID',
                     fieldKey: 'beneficiary',
                     currentValue: formData.beneficiaryName,
                   })
@@ -1323,7 +1411,7 @@ export default function App() {
 
               {[
                 ['age', 'Age'],
-                ['beneficiaryType', 'Beneficiary Type'],
+                ['beneficiaryType', 'Patient Type'],
                 ['pregnancyMonths', 'Months Pregnant'],
                 ['babyAgeDays', 'Baby Age (days)'],
                 ['houseNo', 'House Number'],

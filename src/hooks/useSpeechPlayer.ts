@@ -87,6 +87,35 @@ export function useSpeechPlayer() {
       let decodeFailed = false;
       let decodeQueue = Promise.resolve();
 
+      const useLocalFallback = (message: string) => {
+        if (failed || generation !== generationRef.current) return;
+        failed = true;
+        if (socketRef.current && socketRef.current.readyState < WebSocket.CLOSING) socketRef.current.close();
+        setError({ message: `${message} Using the local browser voice fallback.`, canRetry: true });
+        setCurrentCaption(text);
+        if ('speechSynthesis' in window) {
+          window.speechSynthesis.cancel();
+          const utterance = new SpeechSynthesisUtterance(text);
+          utterance.lang = langCode;
+          utterance.rate = 0.92;
+          utterance.onend = () => {
+            setIsPlaying(false);
+            setCurrentCaption(null);
+            onComplete?.();
+          };
+          utterance.onerror = () => {
+            setIsPlaying(false);
+            setCurrentCaption(null);
+            onComplete?.();
+          };
+          window.speechSynthesis.speak(utterance);
+        } else {
+          setIsPlaying(false);
+          setCurrentCaption(null);
+          onComplete?.();
+        }
+      };
+
       try {
         const AudioCtxClass = window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
         if (!AudioCtxClass) throw new Error('Web Audio is not available in this browser.');
@@ -102,11 +131,7 @@ export function useSpeechPlayer() {
 
         const fail = (message: string) => {
           if (failed || generation !== generationRef.current) return;
-          failed = true;
-          setIsPlaying(false);
-          setCurrentCaption(null);
-          setError({ message, canRetry: true });
-          if (socket.readyState < WebSocket.CLOSING) socket.close();
+          useLocalFallback(message);
         };
 
         const scheduleBuffer = (buffer: AudioBuffer) => {
@@ -236,12 +261,7 @@ export function useSpeechPlayer() {
         };
       } catch (speechError) {
         if (generation !== generationRef.current) return;
-        setIsPlaying(false);
-        setCurrentCaption(null);
-        setError({
-          message: `Gnani Timbre v3.0 TTS failed: ${speechError instanceof Error ? speechError.message : 'Unknown audio error'}`,
-          canRetry: true,
-        });
+        useLocalFallback(`Gnani Timbre v3.0 TTS failed: ${speechError instanceof Error ? speechError.message : 'Unknown audio error'}`);
       }
     },
     [stop]

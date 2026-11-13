@@ -59,7 +59,7 @@ This guide details the step-by-step presentation script for the live 3-minute ha
 ---
 
 ### (f) Missing Field (Agent Asks Short Single Question)
-- **Action**: Speak a visit note omitting beneficiary weight.
+- **Action**: Speak a visit note omitting patient weight.
 - **Spoken Input**: *"Sita Devi ka visit kiya, BP 120 by 80 hai aur bleeding bilkul nahi hai."*
 - **Observed Behavior**:
   - Weight card turns amber/red (State: Missing).
@@ -79,7 +79,7 @@ This guide details the step-by-step presentation script for the live 3-minute ha
 
 ---
 
-### (h) Beneficiary Roster Disambiguation (Duplicate Names)
+### (h) Patient Roster Disambiguation (Duplicate Names)
 - **Action**: Speak a name shared by multiple villagers.
 - **Spoken Input**: *"Sita Devi se mile."*
 - **Observed Behavior**:
@@ -87,7 +87,7 @@ This guide details the step-by-step presentation script for the live 3-minute ha
     - Sita Devi (House 12, ANC Trimester 2)
     - Sita Devi (House 40, PNC Day 14)
   - Agent asks: *"इस नाम की दो लाभार्थी हैं - सीता देवी, मकान नंबर 12 या मकान नंबर 40?"*
-  - Worker speaks *"Makan number 12"*, resolving the correct beneficiary ID `BEN-001`.
+  - Worker speaks *"Makan number 12"*, resolving the correct patient ID `BEN-001`.
 
 ---
 

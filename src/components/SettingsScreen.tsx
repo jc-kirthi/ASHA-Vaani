@@ -208,7 +208,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
           <div>
             <h3 className="text-sm font-bold text-red-950">Delete Register Data</h3>
             <p className="text-xs text-red-800 leading-snug">
-              Permanently deletes all saved beneficiaries and visit records from this server. This cannot be undone.
+              Permanently deletes all saved patients and visit records from this server. This cannot be undone.
             </p>
           </div>
         </div>
@@ -216,7 +216,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
         {purgeDone && (
           <div className="p-2.5 bg-emerald-100 text-emerald-900 rounded-xl text-xs font-bold flex items-center gap-2">
             <Check className="w-4 h-4 text-emerald-700" />
-            Saved beneficiaries and visit records were deleted from the server.
+            Saved patients and visit records were deleted from the server.
           </div>
         )}
 

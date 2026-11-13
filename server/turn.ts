@@ -37,6 +37,7 @@ interface TurnSession {
   pendingSave: boolean;
   pendingRecordId: string | null;
   savedRecord: Record<string, unknown> | null;
+  demoMode: boolean;
 }
 export interface TurnResponse {
   session_id: string;
@@ -64,8 +65,9 @@ export interface TurnResponse {
   extraction_status: ExtractionDiagnostics | null;
 }
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const ROOT = process.env.ASHA_PROJECT_ROOT || path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const BENEFICIARIES_FILE = process.env.ASHA_BENEFICIARIES_FILE || path.join(ROOT, 'data', 'beneficiaries.json');
+const DEMO_BENEFICIARIES_FILE = path.join(ROOT, 'data', 'sandbox', 'beneficiaries.json');
 const sessions = new Map<string, TurnSession>();
 const recentTurns = new Map<string, { startedAt: number; result: Promise<TurnResponse> }>();
 const EMPTY_FIELDS: TurnFields = Object.fromEntries([
@@ -128,7 +130,7 @@ const QUESTIONS: Record<string, Record<string, string>> = {
     choosePerson: 'Which person is this visit for?',
   },
   'hi-IN': {
-    name: 'लाभार्थी का नाम क्या है?',
+    name: 'मरीज का नाम क्या है?',
     visitType: 'यह ANC, प्रसव के बाद की, या टीकाकरण की भेंट है?',
     weight: 'वजन कितना है?',
     pregnancyMonths: 'गर्भावस्था कितने महीने की है?',
@@ -236,11 +238,16 @@ function spokenResponse(session: TurnSession, extracted: ExtractedVisitData, dan
   return null;
 }
 
-async function loadRoster(): Promise<BeneficiaryRecord[]> {
+async function loadRoster(file = BENEFICIARIES_FILE): Promise<BeneficiaryRecord[]> {
   try {
-    const content = await fs.readFile(BENEFICIARIES_FILE, 'utf8');
-    const values: unknown = JSON.parse(content);
-    return Array.isArray(values) ? values as BeneficiaryRecord[] : [];
+    const content = await fs.readFile(file, 'utf8');
+    const parsed: unknown = JSON.parse(content.replace(/^\uFEFF/, ''));
+    const values = Array.isArray(parsed)
+      ? parsed
+      : parsed && typeof parsed === 'object' && Array.isArray((parsed as { value?: unknown }).value)
+        ? (parsed as { value: unknown[] }).value
+        : [];
+    return values as BeneficiaryRecord[];
   } catch (error) {
     if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') return [];
     throw error;
@@ -338,7 +345,7 @@ function makeSavedRecord(session: TurnSession, danger: DangerEngineResult): Reco
     visitDate
   );
   return {
-    id: session.pendingRecordId || `REC-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    id: session.pendingRecordId || `${session.demoMode ? 'DEMO-' : 'REC-'}${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     timestamp: new Date().toISOString(),
     beneficiaryName: fields.name.value,
     beneficiaryId: fields.beneficiaryId.value || fields.name.value,
@@ -361,7 +368,7 @@ function buildReadBack(fields: TurnFields, language: string): string {
   const parts: string[] = [];
   const name = fields.name?.value;
   const visitType = fields.visitType?.value;
-  if (name) parts.push(`Beneficiary ${String(name)}`);
+  if (name) parts.push(`Patient ${String(name)}`);
   if (visitType) parts.push(`${String(visitType)} visit`);
   const labels = language === 'kn-IN'
     ? ['ವಯಸ್ಸು', 'ಗರ್ಭಾವಸ್ಥೆ', 'ಮಗುವಿನ ವಯಸ್ಸು', 'ತೂಕ', 'ಸಿಸ್ಟೊಲಿಕ್ BP', 'ಡಯಾಸ್ಟೊಲಿಕ್ BP', 'ಹಿಮೋಗ್ಲೋಬಿನ್', 'ಕೊನೆಯ ANC', 'TT ಸ್ಥಿತಿ', 'ಕೊನೆಯ TT ಡೋಸ್']
@@ -482,6 +489,7 @@ async function processTurnOnce(
     pendingSave: false,
     pendingRecordId: null,
     savedRecord: null,
+    demoMode: input.session_id.startsWith('demo-'),
   };
   session.language = language;
   const previousQuestion = session.pendingQuestion;
@@ -634,7 +642,8 @@ async function processTurnOnce(
   session.pendingQuestion = null;
   session.pendingField = null;
 
-  const roster = await loadRoster();
+      const rosterFile = session.demoMode ? DEMO_BENEFICIARIES_FILE : BENEFICIARIES_FILE;
+      const roster = await loadRoster(rosterFile);
   const mentionedNames = extracted.beneficiaryNames;
   if (mentionedNames.length > 1 && !previousQuestion?.includes('person')) {
     session.pendingQuestion = question(language, 'choosePerson');
@@ -696,8 +705,8 @@ async function processTurnOnce(
         age: typeof session.fields.age.value === 'number' ? session.fields.age.value : null,
         isNew: true,
       };
-      await fs.mkdir(path.dirname(BENEFICIARIES_FILE), { recursive: true });
-      await fs.writeFile(BENEFICIARIES_FILE, JSON.stringify([...await loadRoster(), created], null, 2), 'utf8');
+      await fs.mkdir(path.dirname(rosterFile), { recursive: true });
+      await fs.writeFile(rosterFile, JSON.stringify([...roster, created], null, 2), 'utf8');
       setField(session.fields, 'beneficiaryId', created.id, currentName);
       rosterLabel = 'created';
       beneficiaryResult = { status: 'created', beneficiary: created };
@@ -817,7 +826,7 @@ async function processTurnOnce(
   sessions.set(session.id, session);
   const answerText = spokenResponse(session, extracted, danger);
   const announcedAnswer = rosterLabel
-    ? `New beneficiary ${currentName} added. ${answerText || ''}`.trim()
+    ? `New patient ${currentName} added. ${answerText || ''}`.trim()
     : answerText;
   return response(
     session, extracted, danger, questions, announcedAnswer, [], null, null, readBack,

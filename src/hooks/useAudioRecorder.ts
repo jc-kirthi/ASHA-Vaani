@@ -26,6 +26,7 @@ export function useAudioRecorder(
   const audioContextRef = useRef<AudioContext | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
+  const workletRef = useRef<AudioWorkletNode | null>(null);
   const animationFrameRef = useRef<number | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const manualStopRef = useRef(false);
@@ -50,6 +51,10 @@ export function useAudioRecorder(
         processorRef.current.disconnect();
       } catch {}
       processorRef.current = null;
+    }
+    if (workletRef.current) {
+      try { workletRef.current.disconnect(); } catch {}
+      workletRef.current = null;
     }
     if (sourceRef.current) {
       try {
@@ -313,11 +318,8 @@ export function useAudioRecorder(
         };
         updateAudioMeter();
 
-        const processor = audioCtx.createScriptProcessor(4096, 1, 1);
-        processorRef.current = processor;
-        processor.onaudioprocess = (event) => {
+        const handleAudioFrame = (inputData: Float32Array) => {
           if (speechFinalizedRef.current) return;
-          const inputData = event.inputBuffer.getChannelData(0);
           let sumSquares = 0;
           for (let index = 0; index < inputData.length; index += 1) {
             sumSquares += inputData[index] * inputData[index];
@@ -346,8 +348,32 @@ export function useAudioRecorder(
           }
           if (endpointDetector.observe(rms, performance.now())) finalizeAfterSilence();
         };
-        source.connect(processor);
-        processor.connect(audioCtx.destination);
+
+        // Prefer AudioWorklet in modern browsers. Keep ScriptProcessor as a contained
+        // fallback for older embedded Android WebViews so the working microphone path
+        // remains available during the migration.
+        if (audioCtx.audioWorklet) {
+          const workletSource = `class P extends AudioWorkletProcessor { process(inputs) { const c = inputs[0]?.[0]; if (c) this.port.postMessage(c); return true; } } registerProcessor('asha-capture', P);`;
+          const workletUrl = URL.createObjectURL(new Blob([workletSource], { type: 'application/javascript' }));
+          try {
+            await audioCtx.audioWorklet.addModule(workletUrl);
+            URL.revokeObjectURL(workletUrl);
+            const worklet = new AudioWorkletNode(audioCtx, 'asha-capture', { numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1 });
+            worklet.port.onmessage = (event: MessageEvent<Float32Array>) => handleAudioFrame(new Float32Array(event.data));
+            workletRef.current = worklet;
+            source.connect(worklet);
+            worklet.connect(audioCtx.destination);
+          } catch {
+            URL.revokeObjectURL(workletUrl);
+          }
+        }
+        if (!workletRef.current) {
+          const processor = audioCtx.createScriptProcessor(4096, 1, 1);
+          processorRef.current = processor;
+          processor.onaudioprocess = (event) => handleAudioFrame(event.inputBuffer.getChannelData(0));
+          source.connect(processor);
+          processor.connect(audioCtx.destination);
+        }
 
         connectionTimeoutRef.current = window.setTimeout(() => {
           if (ws.readyState !== WebSocket.OPEN) {

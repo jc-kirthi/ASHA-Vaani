@@ -13,14 +13,25 @@ type StoredVisit = {
   encryptedToken: string;
 };
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const ROOT = process.env.ASHA_PROJECT_ROOT || path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const RECORDS_FILE = process.env.ASHA_RECORDS_FILE || path.join(ROOT, 'data', 'visit_records.json');
+const DEMO_RECORDS_FILE = path.join(ROOT, 'data', 'sandbox', 'visit_records.json');
 let writeQueue = Promise.resolve();
 
-async function readStoredVisits(): Promise<StoredVisit[]> {
+function recordsFile(recordId?: string): string {
+  return recordId?.startsWith('DEMO-') ? DEMO_RECORDS_FILE : RECORDS_FILE;
+}
+
+async function readStoredVisits(file = RECORDS_FILE): Promise<StoredVisit[]> {
   try {
-    const data: unknown = JSON.parse(await fs.readFile(RECORDS_FILE, 'utf8'));
-    if (!Array.isArray(data)) throw new Error('Stored visit register is invalid.');
+    const content = await fs.readFile(file, 'utf8');
+    const parsed: unknown = JSON.parse(content.replace(/^\uFEFF/, ''));
+    const data = Array.isArray(parsed)
+      ? parsed
+      : parsed && typeof parsed === 'object' && Array.isArray((parsed as { value?: unknown }).value)
+        ? (parsed as { value: unknown[] }).value
+        : null;
+    if (!data) throw new Error('Stored visit register is invalid.');
     return data.filter((item): item is StoredVisit =>
       Boolean(item && typeof item === 'object' &&
         typeof (item as StoredVisit).id === 'string' &&
@@ -40,9 +51,9 @@ function decodeVisit(item: StoredVisit): VisitRecord {
   return record as VisitRecord;
 }
 
-async function writeStoredVisits(visits: StoredVisit[]): Promise<void> {
-  await fs.mkdir(path.dirname(RECORDS_FILE), { recursive: true });
-  await fs.writeFile(RECORDS_FILE, JSON.stringify(visits, null, 2), 'utf8');
+async function writeStoredVisits(visits: StoredVisit[], file = RECORDS_FILE): Promise<void> {
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, JSON.stringify(visits, null, 2), 'utf8');
 }
 
 function serializeWrite<T>(operation: () => Promise<T>): Promise<T> {
@@ -53,19 +64,28 @@ function serializeWrite<T>(operation: () => Promise<T>): Promise<T> {
 
 export async function saveVisitRecord(record: VisitRecord): Promise<string> {
   return serializeWrite(async () => {
-    const visits = await readStoredVisits();
-    visits.forEach(decodeVisit);
+    const file = recordsFile(record.id);
+    const visits = await readStoredVisits(file);
     const encryptedToken = encryptPayload(record);
     const next = visits.filter((item) => item.id !== record.id);
     next.unshift({ id: record.id, encryptedToken });
-    await writeStoredVisits(next);
+    await writeStoredVisits(next, file);
     return encryptedToken;
   });
 }
 
 export async function listVisitRecords(): Promise<VisitRecord[]> {
   const visits = await readStoredVisits();
-  return visits.map(decodeVisit);
+  // Keep unreadable legacy ciphertext in place, but do not let one key-mismatched
+  // record take the entire register offline. New records continue to use the
+  // current AES-256-GCM key and are returned normally.
+  return visits.flatMap((item) => {
+    try {
+      return [decodeVisit(item)];
+    } catch {
+      return [];
+    }
+  });
 }
 
 export async function updateVisitFollowup(
@@ -74,7 +94,8 @@ export async function updateVisitFollowup(
   completed: boolean
 ): Promise<VisitRecord> {
   return serializeWrite(async () => {
-    const visits = await readStoredVisits();
+    const file = recordsFile(recordId);
+    const visits = await readStoredVisits(file);
     const stored = visits.find((item) => item.id === recordId);
     if (!stored) throw new Error('Saved visit was not found.');
 
@@ -90,7 +111,7 @@ export async function updateVisitFollowup(
     };
     const encryptedToken = encryptPayload(record);
     visits[visits.indexOf(stored)] = { id: recordId, encryptedToken };
-    await writeStoredVisits(visits);
+    await writeStoredVisits(visits, file);
     return record;
   });
 }
