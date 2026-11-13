@@ -601,7 +601,23 @@ async function processTurnOnce(
     !pendingFieldPattern[pendingField]?.test(text)
     ? `${extractionLabels[pendingField]} ${text}`
     : text;
-  const extracted = text ? await extract(extractionText, language) : emptyExtraction();
+  const extracted = text
+    ? session.demoMode
+      ? {
+          ...extractDeterministic(extractionText, language),
+          modelUsed: 'demo-rules',
+          llmStatus: 'ready' as const,
+          extractionDiagnostics: {
+            provider: 'Rules' as const,
+            model: 'demo-rules',
+            failedProviders: [],
+            providerLatencyMs: { Gemini: 0, Groq: 0 },
+            totalLatencyMs: 0,
+            llmCalls: 0,
+          },
+        }
+      : await extract(extractionText, language)
+    : emptyExtraction();
   mergeExtraction(session.fields, extracted, text);
 
   if (pendingField === 'houseNo' && session.duplicateCandidates.length) {
@@ -874,7 +890,7 @@ function response(
     followups,
     referral_slip: danger.referralSlip,
     saved_record: record,
-    test_mode: process.env.LLM_PROVIDER === 'mock',
+    test_mode: session.demoMode || process.env.LLM_PROVIDER === 'mock',
     roster_label: rosterLabel,
     beneficiary_result: beneficiaryResult,
     duplicate_candidates: [...session.duplicateCandidates],

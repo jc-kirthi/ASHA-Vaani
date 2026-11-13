@@ -562,10 +562,12 @@ export default function App() {
           void fetch('/api/beneficiaries').then(async (rosterResponse) => {
             if (rosterResponse.ok) setNewBeneficiaries(await rosterResponse.json());
           }).catch(() => {
-            setWorkflowError({
-              message: 'Patient was saved, but the roster could not be refreshed.',
-              canRetry: true,
-            });
+            if (!demoModeRef.current) {
+              setWorkflowError({
+                message: 'Patient was saved, but the roster could not be refreshed.',
+                canRetry: true,
+              });
+            }
           });
         }
         if (result.duplicate_candidates.length) {
@@ -580,6 +582,7 @@ export default function App() {
           setSavedRecordId(savedVisit.id);
           setSavedRecords((previous) => [savedVisit, ...previous.filter((item) => item.id !== savedVisit.id)]);
           setSavedFollowups(result.followups);
+          setWorkflowError(null);
         }
 
         if (result.answer_text) {
@@ -1009,7 +1012,10 @@ export default function App() {
     : language === 'kn-IN'
       ? 'ಭೇಟಿ ಪ್ರಾರಂಭಿಸಿ'
       : 'Start visit';
-  const activeError = sttError || ttsError || workflowError;
+  // Demo Mode deliberately falls back to the local browser voice when Gnani
+  // credentials are unavailable. Keep that provider diagnostic visible in the
+  // banner, but do not present it as a failed microphone workflow.
+  const activeError = demoMode ? workflowError : sttError || ttsError || workflowError;
   const selectLanguage = (nextLanguage: LanguageCode) => {
     setLanguage(nextLanguage);
     setVoice(LANGUAGE_CATALOG[nextLanguage]?.defaultVoice || LANGUAGE_CATALOG['en-IN'].defaultVoice);
@@ -1105,7 +1111,7 @@ export default function App() {
 
       {beneficiaryNotice && (
         <div
-          className="fixed top-20 right-4 z-50 w-[min(24rem,calc(100vw-2rem))] rounded-2xl border border-emerald-300 bg-white p-4 shadow-xl"
+          className="fixed top-20 left-1/2 z-50 w-[min(24rem,calc(100vw-2rem))] -translate-x-1/2 rounded-2xl border border-emerald-300 bg-white p-4 shadow-xl md:left-auto md:right-6 md:translate-x-0"
           role="status"
           aria-live="polite"
         >
@@ -1253,7 +1259,7 @@ export default function App() {
                   ? 'speaking'
                   : stepState === 'checking'
                   ? 'thinking'
-                  : sttError || ttsError || workflowError
+                  : (demoMode ? workflowError : sttError || ttsError || workflowError)
                   ? 'error'
                   : 'idle'
               }
@@ -1463,11 +1469,9 @@ export default function App() {
                   />
                 );
               })}
-            </section>
 
             {/* Post-Save Summary and Spoken Follow-up Checklist */}
             {savedFollowups && (
-              <div className="md:col-span-2">
               <FollowupSummary
                 beneficiaryName={formData.beneficiaryName || ''}
                 beneficiaryId={formData.beneficiaryId || ''}
@@ -1478,7 +1482,6 @@ export default function App() {
                   savedRecordId ? updateFollowup(savedRecordId, followupId, completed) : Promise.resolve()
                 }
               />
-              </div>
             )}
 
             {/* Bottom Actions Bar */}
@@ -1510,6 +1513,7 @@ export default function App() {
                 </button>
               </div>
             )}
+            </section>
           </div>
         )}
 

@@ -32,20 +32,20 @@ export const Header: React.FC<HeaderProps> = ({
 
   return (
     <header className="sticky top-0 z-40 bg-white/95 backdrop-blur border-b border-teal-100 shadow-xs px-4 py-2.5">
-      <div className="max-w-7xl mx-auto flex items-center justify-between gap-2">
+      <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-2">
         {/* App Branding */}
-        <div className="flex items-center gap-2">
+        <div className="min-w-0 flex-1 flex items-center gap-2">
           <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-teal-600 to-emerald-500 flex items-center justify-center text-white shadow-sm">
             <Activity className="w-6 h-6" />
           </div>
-          <div>
-            <div className="flex items-center gap-1.5">
+          <div className="min-w-0">
+            <div className="flex min-w-0 flex-wrap items-center gap-1.5">
               <label className="sr-only" htmlFor="visit-language">Visit language</label>
               <select
                 id="visit-language"
                 value={currentLanguage}
                 onChange={(event) => onSelectLanguage(event.target.value as LanguageCode)}
-                className="max-w-28 rounded-lg border border-gray-300 bg-white px-2 py-2 text-xs font-semibold text-gray-800"
+                className="max-w-[6.5rem] rounded-lg border border-gray-300 bg-white px-2 py-2 text-xs font-semibold text-gray-800"
               >
                 {Object.values(LANGUAGE_CATALOG).map((lang) => (
                   <option key={lang.code} value={lang.code}>{lang.nativeName}</option>
@@ -60,12 +60,12 @@ export const Header: React.FC<HeaderProps> = ({
                 aria-label={healthMessage}
               >
                 <span className={`w-2.5 h-2.5 rounded-full ${healthOk ? 'bg-emerald-500' : 'bg-red-600'}`} />
-                <span className={healthOk ? 'text-emerald-700' : 'text-red-700'}>
+                <span className={`hidden sm:inline ${healthOk ? 'text-emerald-700' : 'text-red-700'}`}>
                   {healthOk ? 'Voice ready' : 'Setup required'}
                 </span>
               </button>
 
-              <h1 className="text-lg font-bold tracking-tight text-gray-900 leading-none">
+              <h1 className="truncate text-base sm:text-lg font-bold tracking-tight text-gray-900 leading-none">
                 ASHA Vaani
               </h1>
               <span className="text-[10px] uppercase font-semibold px-1.5 py-0.5 rounded-sm bg-teal-50 text-teal-700 border border-teal-200">
@@ -79,7 +79,7 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
 
         {/* Action Controls */}
-        <div className="flex items-center gap-1.5">
+        <div className="w-full sm:w-auto flex items-center justify-end gap-1.5">
           {/* Noise Meter Pill */}
           <div
             className={`flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-semibold border ${

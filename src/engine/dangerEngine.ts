@@ -169,7 +169,7 @@ export function evaluateDangerSigns(
   const transPosRegex = /(pehle.*nahi.*ab|kal.*nahi.*aaj|nahi.*shuru|nahi (thi|tha|rahi|ittu).*ab|didn't have.*(now|started)|did not have.*(now|started)|no.*earlier.*now.*(started|active|bleeding)|irallilla.*ivaga (ide|aaguttide)|munche.*irallilla.*ivaga|पहले.*नहीं.*अब|ಇಲ್ಲ.*ಈಗ.*(ಇದೆ|ಆಗುತ್ತಿದೆ))/i;
   const transNegRegex = /(pehle.*(thi|tha|hua tha).*ab (nahi|band|theek)|(had|was).*earlier.*now.*(no|none|not|stopped|cured)|earlier.*now.*stopped|(ittu|itthu).*ivaga (illa|nillide)|modalu.*ivaga illa|\b(bleeding|spotting|fever) stopped (yesterday|today|now)\b|\b(stopped|ended) yesterday\b|\b(stopped|resolved|ended|cured)\b|पहले.*(था|थी).*अब.*(नहीं|बंद)|ಹಿಂದೆ.*ಈಗ.*(ಇಲ್ಲ|ನಿಂತಿದೆ))/i;
   const unknownRegex = /(bataya nahi|pata nahi|did not mention|not reported|unknown whether|unclear whether|पता नहीं|बताया नहीं|ಗೊತ್ತಿಲ್ಲ)/i;
-  const hedgeRegex = /(thoda.*jaisa|jaisa laga|doubtful|shakk hai|maybe|possibly|perhaps|anusthide|शायद|हो सकता है|ಬಹುಶಃ)/i;
+  const hedgeRegex = /(thoda.*jaisa|jaisa laga|doubtful|shakk hai|maybe|possibly|perhaps|may have|might have|could have|uncertain|anusthide|शायद|हो सकता है|ಬಹುಶಃ)/i;
   const negRegex = /\b(nahi|bilkul nahi|no|not|none|illa|aguttilla|ledu|illai|nei|nathi|denies|absent)\b|नहीं|नही|ಇಲ್ಲ/i;
   const pastRegex = /\b(yesterday|last night|last week|earlier|previously|before|was|had)\b|kal|pehle|munche|कल|पहले|था|थी|ನಿನ್ನೆ|ಹಿಂದೆ/i;
 

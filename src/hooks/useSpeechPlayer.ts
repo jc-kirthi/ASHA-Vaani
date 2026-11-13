@@ -86,33 +86,34 @@ export function useSpeechPlayer() {
       let decodedChunkCount = 0;
       let decodeFailed = false;
       let decodeQueue = Promise.resolve();
+      let fallbackTimer: number | null = null;
+      let socketTimer: number | null = null;
 
       const useLocalFallback = (message: string) => {
         if (failed || generation !== generationRef.current) return;
         failed = true;
+        if (socketTimer !== null) window.clearTimeout(socketTimer);
         if (socketRef.current && socketRef.current.readyState < WebSocket.CLOSING) socketRef.current.close();
         setError({ message: `${message} Using the local browser voice fallback.`, canRetry: true });
         setCurrentCaption(text);
+        const finishFallback = () => {
+          if (fallbackTimer !== null) window.clearTimeout(fallbackTimer);
+          fallbackTimer = null;
+          setIsPlaying(false);
+          setCurrentCaption(null);
+          onComplete?.();
+        };
         if ('speechSynthesis' in window) {
           window.speechSynthesis.cancel();
           const utterance = new SpeechSynthesisUtterance(text);
           utterance.lang = langCode;
           utterance.rate = 0.92;
-          utterance.onend = () => {
-            setIsPlaying(false);
-            setCurrentCaption(null);
-            onComplete?.();
-          };
-          utterance.onerror = () => {
-            setIsPlaying(false);
-            setCurrentCaption(null);
-            onComplete?.();
-          };
+          utterance.onend = finishFallback;
+          utterance.onerror = finishFallback;
+          fallbackTimer = window.setTimeout(finishFallback, Math.max(2500, Math.min(7000, text.length * 45)));
           window.speechSynthesis.speak(utterance);
         } else {
-          setIsPlaying(false);
-          setCurrentCaption(null);
-          onComplete?.();
+          finishFallback();
         }
       };
 
@@ -128,6 +129,9 @@ export function useSpeechPlayer() {
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const socket = new WebSocket(`${protocol}//${window.location.host}/ws/tts`);
         socketRef.current = socket;
+        socketTimer = window.setTimeout(() => {
+          fail('Gnani Timbre v3.0 did not respond before the timeout. Please retry.');
+        }, 9000);
 
         const fail = (message: string) => {
           if (failed || generation !== generationRef.current) return;
@@ -198,7 +202,11 @@ export function useSpeechPlayer() {
               fail(data.message || 'Gnani Timbre v3.0 synthesis failed.');
               return;
             }
-            if (data.type === 'complete') finalReceived = true;
+            if (data.type === 'complete') {
+              finalReceived = true;
+              if (socketTimer !== null) window.clearTimeout(socketTimer);
+              socketTimer = null;
+            }
             if (data.audioBase64) {
               const audioChunk = decodeBase64(data.audioBase64);
               chunks.push(audioChunk);
@@ -217,7 +225,11 @@ export function useSpeechPlayer() {
                 }
               });
             }
-            if (data.isFinal) finalReceived = true;
+            if (data.isFinal) {
+              finalReceived = true;
+              if (socketTimer !== null) window.clearTimeout(socketTimer);
+              socketTimer = null;
+            }
             if (finalReceived && !finishScheduled) {
               finishScheduled = true;
               void decodeQueue.then(async () => {
