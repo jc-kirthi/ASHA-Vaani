@@ -52,18 +52,18 @@ export const Header: React.FC<HeaderProps> = ({
                 ))}
               </select>
 
-              <button
-                type="button"
-                onClick={onRetryHealth}
-                className="flex items-center gap-1.5 text-[10px] font-semibold text-gray-700"
-                title={healthMessage}
-                aria-label={healthMessage}
-              >
-                <span className={`w-2.5 h-2.5 rounded-full ${healthOk ? 'bg-emerald-500' : 'bg-red-600'}`} />
-                <span className={`hidden sm:inline ${healthOk ? 'text-emerald-700' : 'text-red-700'}`}>
-                  {healthOk ? 'Voice ready' : 'Setup required'}
-                </span>
-              </button>
+              {healthOk && (
+                <button
+                  type="button"
+                  onClick={onRetryHealth}
+                  className="flex items-center gap-1.5 text-[10px] font-semibold text-gray-700"
+                  title={healthMessage}
+                  aria-label={healthMessage}
+                >
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
+                  <span className="hidden sm:inline text-emerald-700">Voice ready</span>
+                </button>
+              )}
 
               <h1 className="truncate text-base sm:text-lg font-bold tracking-tight text-gray-900 leading-none">
                 ASHA Vaani
